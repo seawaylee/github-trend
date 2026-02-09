@@ -4,14 +4,14 @@
 # AI Service Configuration (OpenRouter-compatible endpoint)
 ai:
   base_url: "http://127.0.0.1:8045"
-  api_key: "sk-f750eba34c6145fc857feaf7f3851f5b"
+  api_key: "your-api-key-here"
   model: "gemini-3-pro-high"
   max_retries: 3
   timeout: 30
 
 # WeCom (WeChat Work) Configuration
 wecom:
-  webhook_url: "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=29f45d56-3f1a-45af-a146-02507f6465b7"
+  webhook_url: "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=YOUR-WEBHOOK-KEY"
 
 # Task Scheduling Configuration
 tasks:

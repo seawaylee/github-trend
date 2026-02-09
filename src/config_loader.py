@@ -36,7 +36,7 @@ def load_config(config_path: str) -> Dict[str, Any]:
             config = yaml.safe_load(f)
     except yaml.YAMLError as e:
         raise ConfigError(f"Invalid YAML in configuration file: {e}")
-    except Exception as e:
+    except (IOError, PermissionError) as e:
         raise ConfigError(f"Error reading configuration file: {e}")
 
     # Validate required sections
@@ -44,5 +44,31 @@ def load_config(config_path: str) -> Dict[str, Any]:
     for section in required_sections:
         if section not in config:
             raise ConfigError(f"Missing required configuration section: {section}")
+
+    # Validate required fields in each section
+    required_fields = {
+        'ai': ['base_url', 'api_key', 'model'],
+        'wecom': ['webhook_url'],
+        'tasks': ['daily_limit', 'weekly_limit', 'daily_hour', 'weekly_day', 'weekly_hour'],
+        'logging': ['level', 'file']
+    }
+
+    for section, fields in required_fields.items():
+        for field in fields:
+            if field not in config[section]:
+                raise ConfigError(f"Missing required field '{field}' in section '{section}'")
+
+    # Validate data types and ranges
+    tasks = config['tasks']
+    if not isinstance(tasks.get('daily_limit'), int) or tasks['daily_limit'] < 1:
+        raise ConfigError("tasks.daily_limit must be a positive integer")
+    if not isinstance(tasks.get('weekly_limit'), int) or tasks['weekly_limit'] < 1:
+        raise ConfigError("tasks.weekly_limit must be a positive integer")
+    if not isinstance(tasks.get('daily_hour'), int) or not (0 <= tasks['daily_hour'] <= 23):
+        raise ConfigError("tasks.daily_hour must be an integer between 0 and 23")
+    if not isinstance(tasks.get('weekly_day'), int) or not (0 <= tasks['weekly_day'] <= 6):
+        raise ConfigError("tasks.weekly_day must be an integer between 0 (Monday) and 6 (Sunday)")
+    if not isinstance(tasks.get('weekly_hour'), int) or not (0 <= tasks['weekly_hour'] <= 23):
+        raise ConfigError("tasks.weekly_hour must be an integer between 0 and 23")
 
     return config
