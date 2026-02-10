@@ -102,11 +102,23 @@ class GitHubScraper:
         language = language_elem.get_text(strip=True) if language_elem else "Unknown"
 
         # Extract stars and stars growth
-        stars_elem = article.find('svg', class_='octicon-star')
+        # Find the stargazers link which contains the total star count
+        # The star button (which also has octicon-star) might appear first and contains "Star" text,
+        # leading to 0 stars if we just grab the first octicon-star parent.
         stars = 0
-        if stars_elem and stars_elem.parent:
-            stars_text = stars_elem.parent.get_text(strip=True)
+        stargazers_link = article.find('a', href=f"/{repo_name}/stargazers")
+
+        if stargazers_link:
+            stars_text = stargazers_link.get_text(strip=True)
             stars = self._parse_stars(stars_text)
+        else:
+            # Fallback to looking for the icon if link not found (though less reliable)
+            stars_elem = article.find('svg', class_='octicon-star')
+            if stars_elem and stars_elem.parent:
+                stars_text = stars_elem.parent.get_text(strip=True)
+                # Ensure we didn't pick up the "Star" button text
+                if "Star" not in stars_text:
+                    stars = self._parse_stars(stars_text)
 
         # Extract stars growth
         growth_elem = article.find('span', class_='d-inline-block float-sm-right')

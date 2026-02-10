@@ -70,6 +70,14 @@ class AIFilter:
             )
 
             content = response.choices[0].message.content
+
+            # Clean up markdown code blocks if present
+            if content.startswith("```"):
+                content = content.strip().strip("`")
+                if content.startswith("json"):
+                    content = content[4:]
+                content = content.strip()
+
             result = json.loads(content)
 
             return FilterResult(

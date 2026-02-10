@@ -83,6 +83,18 @@ def run_weekly_task(config: dict, dry_run: bool = False, week_start: date = None
 
         logger.info("Weekly report generated")
 
+        # Save to history
+        history_dir = Path("history")
+        history_dir.mkdir(exist_ok=True)
+        history_file = history_dir / f"{week_end.isoformat()}-weekly.md"
+
+        try:
+            with open(history_file, 'w', encoding='utf-8') as f:
+                f.write(report)
+            logger.info(f"✓ Weekly report saved to {history_file}")
+        except Exception as e:
+            logger.error(f"Failed to save history: {e}")
+
         if dry_run:
             print("\n🔍 DRY RUN - Would send the following report:\n")
             print(report)

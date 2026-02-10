@@ -55,6 +55,14 @@ class WeComNotifier:
             logger.error(f"Failed to send WeCom message: {e}")
             return False
 
+    def format_daily_report(
+        self,
+        projects_with_reasons: List[tuple[TrendingProject, FilterResult]],
+        report_date: date
+    ) -> str:
+        """Format daily report without sending"""
+        return self._format_daily_message(projects_with_reasons, report_date)
+
     def send_daily_report(
         self,
         projects_with_reasons: List[tuple[TrendingProject, FilterResult]],

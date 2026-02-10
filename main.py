@@ -80,7 +80,11 @@ def run_daily_task(config: dict, dry_run: bool = False):
 
     # Initialize components
     db = Database()
-    scraper = GitHubScraper(config['github'].get('token'))
+
+    # safe get github token
+    github_config = config.get('github', {})
+    scraper = GitHubScraper(github_config.get('token'))
+
     ai_filter = AIFilter(
         base_url=config['ai']['base_url'],
         api_key=config['ai']['api_key'],
@@ -140,14 +144,28 @@ def run_daily_task(config: dict, dry_run: bool = False):
         daily_limit = config['tasks']['daily_limit']
         top_projects = ai_projects[:daily_limit]
 
+        # Generate report content
+        report_content = notifier.format_daily_report(top_projects, today)
+
+        # Save to history
+        history_dir = Path("history")
+        history_dir.mkdir(exist_ok=True)
+        history_file = history_dir / f"{today.isoformat()}-daily.md"
+
+        try:
+            with open(history_file, 'w', encoding='utf-8') as f:
+                f.write(report_content)
+            logger.info(f"✓ Daily report saved to {history_file}")
+        except Exception as e:
+            logger.error(f"Failed to save history: {e}")
+
         logger.info(f"Sending top {len(top_projects)} projects to WeCom")
 
         if dry_run:
             print("\n🔍 DRY RUN - Would send the following message:\n")
-            message = notifier._format_daily_message(top_projects, today)
-            print(message)
+            print(report_content)
         else:
-            success = notifier.send_daily_report(top_projects, today)
+            success = notifier.send_markdown(report_content)
             if success:
                 logger.info("✓ Daily report sent successfully")
             else:
@@ -156,7 +174,11 @@ def run_daily_task(config: dict, dry_run: bool = False):
     except Exception as e:
         logger.error(f"Daily task failed: {e}", exc_info=True)
         if not dry_run:
-            notifier.send_markdown(f"⚠️ 每日任务执行失败：{str(e)}")
+            try:
+                if 'notifier' in locals():
+                    notifier.send_markdown(f"⚠️ 每日任务执行失败：{str(e)}")
+            except Exception:
+                pass
         raise
 
     finally:
@@ -197,7 +219,8 @@ def main():
     try:
         run_daily_task(config, dry_run=args.dry_run)
         return 0
-    except Exception:
+    except Exception as e:
+        logging.getLogger(__name__).error(f"Fatal error: {e}", exc_info=True)
         return 1
 
 
