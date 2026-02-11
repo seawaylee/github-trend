@@ -144,8 +144,12 @@ def run_daily_task(config: dict, dry_run: bool = False):
         daily_limit = config['tasks']['daily_limit']
         top_projects = ai_projects[:daily_limit]
 
+        # Generate summary
+        logger.info("Generating daily summary and business analysis...")
+        summary = ai_filter.generate_daily_summary(top_projects)
+
         # Generate report content
-        report_content = notifier.format_daily_report(top_projects, today)
+        report_content = notifier.format_daily_report(top_projects, today, summary)
 
         # Save to history
         history_dir = Path("history")

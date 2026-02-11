@@ -58,15 +58,17 @@ class WeComNotifier:
     def format_daily_report(
         self,
         projects_with_reasons: List[tuple[TrendingProject, FilterResult]],
-        report_date: date
+        report_date: date,
+        summary: str = ""
     ) -> str:
         """Format daily report without sending"""
-        return self._format_daily_message(projects_with_reasons, report_date)
+        return self._format_daily_message(projects_with_reasons, report_date, summary)
 
     def send_daily_report(
         self,
         projects_with_reasons: List[tuple[TrendingProject, FilterResult]],
-        report_date: date
+        report_date: date,
+        summary: str = ""
     ) -> bool:
         """
         Send daily AI trends report
@@ -74,29 +76,32 @@ class WeComNotifier:
         Args:
             projects_with_reasons: List of (project, filter_result) tuples
             report_date: Date of the report
+            summary: Optional LLM-generated summary
 
         Returns:
             True if successful
         """
-        message = self._format_daily_message(projects_with_reasons, report_date)
+        message = self._format_daily_message(projects_with_reasons, report_date, summary)
         return self.send_markdown(message)
 
     def _format_daily_message(
         self,
         projects_with_reasons: List[tuple[TrendingProject, FilterResult]],
-        report_date: date
+        report_date: date,
+        summary: str = ""
     ) -> str:
         """Format daily message in markdown"""
 
+        limit = len(projects_with_reasons)
         lines = [
-            "🔥 **今日GitHub AI趋势 Top 5**",
+            f"🔥 **今日GitHub AI趋势 Top {limit}**",
             f"\n📅 {report_date.strftime('%Y-%m-%d')}",
             "\n---\n"
         ]
 
-        emojis = ["1️⃣", "2️⃣", "3️⃣", "4️⃣", "5️⃣"]
+        emojis = ["1️⃣", "2️⃣", "3️⃣", "4️⃣", "5️⃣", "6️⃣", "7️⃣", "8️⃣", "9️⃣", "🔟"]
 
-        for idx, (project, result) in enumerate(projects_with_reasons[:5]):
+        for idx, (project, result) in enumerate(projects_with_reasons):
             emoji = emojis[idx] if idx < len(emojis) else f"{idx+1}."
 
             # Format stars with comma
@@ -110,6 +115,11 @@ class WeComNotifier:
                 f"💡 AI亮点：{result.reason}",
                 f"🔗 [查看项目]({project.url})\n"
             ])
+
+        if summary:
+            lines.append("\n---\n")
+            lines.append("📝 **AI智能总结 & 业务价值分析**\n")
+            lines.append(summary)
 
         lines.append("\n---\n⏰ 由GitHub-Trend-Bot自动推送")
 

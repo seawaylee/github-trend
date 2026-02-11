@@ -120,3 +120,54 @@ class AIFilter:
                 logger.debug(f"✗ Not AI: {project.repo_name}")
 
         return results
+
+    def generate_daily_summary(self, projects: List[tuple[TrendingProject, FilterResult]]) -> str:
+        """
+        Generate a summary of the provided projects, highlighting relevance to Sohu's business.
+
+        Args:
+            projects: List of (project, filter_result) tuples
+
+        Returns:
+            Summary text
+        """
+        if not projects:
+            return ""
+
+        projects_text = ""
+        for i, (p, r) in enumerate(projects, 1):
+            projects_text += f"{i}. {p.repo_name}: {p.description} (Language: {p.language})\n"
+
+        prompt = f"""
+分析以下今日GitHub热门AI项目列表：
+
+{projects_text}
+
+请完成以下任务：
+1. **每日趋势总结**：用一段话简要概括今日项目的整体技术方向或热点（如Agent、RAG、多模态等）。
+2. **搜狐业务价值评估**：
+   请仔细评估这些项目对搜狐公司的**搜索引擎**、**推荐系统**、**AI基础设施**（训练/推理/部署）是否有明确的技术价值或应用潜力。
+   - 只有在确实相关且有提升可能时才提及。
+   - 如果有，请列出项目名并详细说明其对特定业务场景（如搜索相关性、推荐多样性、模型推理加速等）的潜在收益。
+   - 如果没有明显的直接价值，则不要编造，这部分留空即可。
+
+输出格式要求：
+- 使用Markdown格式。
+- 总结部分尽量精炼。
+- 业务评估部分如果有内容，请使用"🚀 **搜狐业务价值分析**"作为标题。
+"""
+
+        try:
+            response = self.client.chat.completions.create(
+                model=self.model,
+                messages=[
+                    {"role": "system", "content": "你是一个资深技术专家，擅长评估开源项目对企业业务的价值。"},
+                    {"role": "user", "content": prompt}
+                ],
+                temperature=0.4,
+                max_tokens=800
+            )
+            return response.choices[0].message.content.strip()
+        except Exception as e:
+            logger.error(f"Failed to generate summary: {e}")
+            return "（生成总结失败）"
