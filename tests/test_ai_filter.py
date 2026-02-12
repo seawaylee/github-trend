@@ -62,3 +62,47 @@ def test_keyword_fallback():
     # Test non-AI projects
     assert filter._keyword_fallback("web development framework") is False
     assert filter._keyword_fallback("database management") is False
+
+
+def test_generate_daily_summary_filters_meta_leakage():
+    """Test summary falls back when LLM returns meta/system leakage text"""
+    with patch('src.ai_filter.OpenAI') as mock:
+        client = Mock()
+        mock.return_value = client
+
+        response = Mock()
+        response.choices = [Mock()]
+        response.choices[0].message.content = (
+            "我按说明本应先使用 using-superpowers 等技能文件，"
+            "但这些路径位于 /Users/... 无法读取 SKILL.md。"
+        )
+        client.chat.completions.create.return_value = response
+
+        filter = AIFilter(
+            base_url="http://localhost:8045",
+            api_key="sk-test",
+            model="gpt-5.1 low"
+        )
+
+        projects = [
+            (
+                TrendingProject(
+                    repo_name="test/ml-project",
+                    description="A machine learning framework for deep learning",
+                    language="Python",
+                    url="https://github.com/test/ml-project",
+                    stars=1000,
+                    stars_growth=100,
+                    ranking=1
+                ),
+                FilterResult(is_ai_related=True, reason="Uses machine learning")
+            )
+        ]
+
+        summary = filter.generate_daily_summary(projects)
+
+        assert "using-superpowers" not in summary.lower()
+        assert "/users/" not in summary.lower()
+        assert "skill.md" not in summary.lower()
+        assert "每日趋势总结" in summary
+        assert "搜狐业务价值分析" in summary

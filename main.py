@@ -12,6 +12,9 @@ from src.github_scraper import GitHubScraper
 from src.ai_filter import AIFilter
 from src.wecom_notifier import WeComNotifier
 
+DAILY_PUSH_LIMIT = 5
+RECENT_PUSH_LOOKBACK_DAYS = 7
+
 
 def setup_logging(config: dict):
     """Setup logging configuration"""
@@ -80,6 +83,7 @@ def run_daily_task(config: dict, dry_run: bool = False):
 
     # Initialize components
     db = Database()
+    db.init_db()
 
     # safe get github token
     github_config = config.get('github', {})
@@ -91,6 +95,7 @@ def run_daily_task(config: dict, dry_run: bool = False):
         model=config['ai']['model']
     )
     notifier = WeComNotifier(config['wecom']['webhook_url'])
+    today = date.today()
 
     try:
         # Fetch trending projects
@@ -114,8 +119,22 @@ def run_daily_task(config: dict, dry_run: bool = False):
                 notifier.send_markdown("⚠️ 今日未发现AI相关趋势项目")
             return
 
+        # Select Top5 while excluding repos pushed in last 7 days.
+        top_projects = select_daily_projects_for_push(ai_projects, db, today)
+        logger.info(
+            "Selected %s projects for push (Top%s, excluding last %s days)",
+            len(top_projects),
+            DAILY_PUSH_LIMIT,
+            RECENT_PUSH_LOOKBACK_DAYS
+        )
+
+        if not top_projects:
+            logger.warning("No new projects to push after 7-day de-duplication")
+            if not dry_run:
+                notifier.send_markdown("⚠️ 今日候选项目均在最近7天内已推送，已自动跳过。")
+            return
+
         # Save to database
-        today = date.today()
         for project, filter_result in ai_projects:
             # Save project
             from src.database import Project, TrendRecord
@@ -140,10 +159,6 @@ def run_daily_task(config: dict, dry_run: bool = False):
             )
             db.save_trend_record(record)
 
-        # Get top N projects
-        daily_limit = config['tasks']['daily_limit']
-        top_projects = ai_projects[:daily_limit]
-
         # Generate summary
         logger.info("Generating daily summary and business analysis...")
         summary = ai_filter.generate_daily_summary(top_projects)
@@ -163,17 +178,19 @@ def run_daily_task(config: dict, dry_run: bool = False):
         except Exception as e:
             logger.error(f"Failed to save history: {e}")
 
-        logger.info(f"Sending top {len(top_projects)} projects to WeCom")
+        logger.info(f"Sending top {len(top_projects)} projects and summary to WeCom")
 
         if dry_run:
             print("\n🔍 DRY RUN - Would send the following message:\n")
             print(report_content)
         else:
-            success = notifier.send_markdown(report_content)
+            success = notifier.send_daily_report_split(top_projects, today, summary)
             if success:
-                logger.info("✓ Daily report sent successfully")
+                pushed_repo_names = [project.repo_name for project, _ in top_projects]
+                db.save_daily_push_records(pushed_repo_names, today)
+                logger.info("✓ Daily report split sent successfully")
             else:
-                logger.error("✗ Failed to send daily report")
+                logger.error("✗ Failed to send split daily report")
 
     except Exception as e:
         logger.error(f"Daily task failed: {e}", exc_info=True)
@@ -187,6 +204,22 @@ def run_daily_task(config: dict, dry_run: bool = False):
 
     finally:
         db.close()
+
+
+def select_daily_projects_for_push(
+    ai_projects: list[tuple],
+    db: Database,
+    today: date
+) -> list[tuple]:
+    """Select Top5 daily projects excluding repos pushed in last 7 days."""
+    recent_pushed = db.get_recently_pushed_repo_names(
+        lookback_days=RECENT_PUSH_LOOKBACK_DAYS,
+        reference_date=today
+    )
+    return [
+        item for item in ai_projects
+        if item[0].repo_name not in recent_pushed
+    ][:DAILY_PUSH_LIMIT]
 
 
 def main():

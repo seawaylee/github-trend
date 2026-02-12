@@ -56,7 +56,7 @@ An automated tool that tracks trending GitHub repositories, filters for AI-relat
 Edit `config/config.yaml` to match your environment:
 
 ### AI Service
-- `base_url`: URL of your LLM service (e.g., `http://127.0.0.1:8045` for local models)
+- `base_url`: URL of your LLM service (e.g., `http://127.0.0.1:8045/v1` for local proxy)
 - `api_key`: API Key for the service
 - `model`: Model name to use (e.g., `gemini-3-pro-high`)
 

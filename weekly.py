@@ -68,6 +68,7 @@ def run_weekly_task(config: dict, dry_run: bool = False, week_start: date = None
 
     # Initialize components
     db = Database()
+    db.init_db()
     reporter = WeeklyReporter(
         database=db,
         ai_base_url=config['ai']['base_url'],

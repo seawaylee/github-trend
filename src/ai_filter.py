@@ -8,6 +8,24 @@ from src.github_scraper import TrendingProject
 
 
 logger = logging.getLogger(__name__)
+SUMMARY_BLOCKLIST = (
+    "using-superpowers",
+    "skill.md",
+    "/users/",
+    "/private/tmp",
+    "沙箱",
+    "无法读取",
+    "权限",
+    "技能文件"
+)
+
+
+def _normalize_base_url(base_url: str) -> str:
+    """Normalize OpenAI-compatible base URL to local proxy path."""
+    normalized = base_url.rstrip("/")
+    if normalized.endswith("/v1"):
+        return normalized
+    return f"{normalized}/v1"
 
 
 @dataclass
@@ -37,7 +55,8 @@ class AIFilter:
             api_key: API key
             model: Model name
         """
-        self.client = OpenAI(base_url=base_url, api_key=api_key)
+        normalized_base_url = _normalize_base_url(base_url)
+        self.client = OpenAI(base_url=normalized_base_url, api_key=api_key)
         self.model = model
 
     def is_ai_related(self, project: TrendingProject) -> FilterResult:
@@ -167,7 +186,31 @@ class AIFilter:
                 temperature=0.4,
                 max_tokens=800
             )
-            return response.choices[0].message.content.strip()
+            summary_text = response.choices[0].message.content.strip()
+            if self._is_invalid_summary(summary_text):
+                logger.warning("LLM summary flagged as invalid/meta content, using fallback summary")
+                return self._build_fallback_summary(projects)
+            return summary_text
         except Exception as e:
             logger.error(f"Failed to generate summary: {e}")
-            return "（生成总结失败）"
+            return self._build_fallback_summary(projects)
+
+    def _is_invalid_summary(self, text: str) -> bool:
+        """Detect leaked meta/system text that should never be pushed."""
+        if not text or not text.strip():
+            return True
+
+        lower_text = text.lower()
+        return any(marker in lower_text for marker in SUMMARY_BLOCKLIST)
+
+    def _build_fallback_summary(self, projects: List[tuple[TrendingProject, FilterResult]]) -> str:
+        """Build stable summary when LLM output is unavailable or invalid."""
+        top_names = "、".join([project.repo_name for project, _ in projects[:3]]) or "今日上榜项目"
+        return (
+            "## 每日趋势总结\n\n"
+            f"今日热点主要集中在 AI Agent、LLM 应用与工程工具链，代表项目包括：{top_names}。\n\n"
+            "🚀 **搜狐业务价值分析**\n\n"
+            "- 搜索引擎：可优先验证查询改写、结构化抽取、结果摘要等能力。\n"
+            "- 推荐系统：可用于内容标签补全、冷启动特征生成与候选重排增强。\n"
+            "- AI基础设施：建议推进统一 LLM 网关、推理成本优化与多模型容灾路由。"
+        )

@@ -1,7 +1,7 @@
 """Database operations module"""
 import sqlite3
 from dataclasses import dataclass
-from datetime import date
+from datetime import date, timedelta
 from typing import Optional, List
 from pathlib import Path
 
@@ -82,6 +82,17 @@ class Database:
                 summary TEXT,
                 tech_trends TEXT,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+
+        # Daily push records table (actual pushed repos history)
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS daily_push_records (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                repo_name TEXT NOT NULL,
+                pushed_date DATE NOT NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(repo_name, pushed_date)
             )
         """)
 
@@ -167,6 +178,47 @@ class Database:
         """, (start_date.isoformat(), end_date.isoformat()))
 
         return [dict(row) for row in cursor.fetchall()]
+
+    def save_daily_push_records(self, repo_names: List[str], pushed_date: date) -> None:
+        """Save daily pushed repo names for de-duplication in next days."""
+        if not repo_names:
+            return
+
+        cursor = self.conn.cursor()
+        values = [(repo_name, pushed_date.isoformat()) for repo_name in repo_names]
+        cursor.executemany("""
+            INSERT OR IGNORE INTO daily_push_records (repo_name, pushed_date)
+            VALUES (?, ?)
+        """, values)
+        self.conn.commit()
+
+    def get_recently_pushed_repo_names(
+        self,
+        lookback_days: int = 7,
+        reference_date: Optional[date] = None
+    ) -> set[str]:
+        """
+        Get repo names pushed within lookback window before reference date.
+
+        Example:
+            reference_date=2026-02-12, lookback_days=7
+            window: [2026-02-05, 2026-02-11]
+        """
+        if reference_date is None:
+            reference_date = date.today()
+
+        if lookback_days < 1:
+            return set()
+
+        window_start = reference_date - timedelta(days=lookback_days - 1)
+        cursor = self.conn.cursor()
+        cursor.execute("""
+            SELECT DISTINCT repo_name
+            FROM daily_push_records
+            WHERE pushed_date >= ? AND pushed_date <= ?
+        """, (window_start.isoformat(), reference_date.isoformat()))
+
+        return {row[0] for row in cursor.fetchall()}
 
     def close(self):
         """Close database connection"""

@@ -10,6 +10,14 @@ from src.database import Database
 logger = logging.getLogger(__name__)
 
 
+def _normalize_base_url(base_url: str) -> str:
+    """Normalize OpenAI-compatible base URL to local proxy path."""
+    normalized = base_url.rstrip("/")
+    if normalized.endswith("/v1"):
+        return normalized
+    return f"{normalized}/v1"
+
+
 class WeeklyReporter:
     """Generate weekly AI trends report"""
 
@@ -30,7 +38,8 @@ class WeeklyReporter:
             ai_model: LLM model name
         """
         self.db = database
-        self.llm = OpenAI(base_url=ai_base_url, api_key=ai_api_key)
+        normalized_base_url = _normalize_base_url(ai_base_url)
+        self.llm = OpenAI(base_url=normalized_base_url, api_key=ai_api_key)
         self.model = ai_model
 
     def generate_report(

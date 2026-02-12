@@ -3,7 +3,7 @@
 
 # AI Service Configuration (OpenRouter-compatible endpoint)
 ai:
-  base_url: "http://127.0.0.1:8045"
+  base_url: "http://127.0.0.1:8045/v1"
   api_key: "your-api-key-here"
   model: "gemini-3-pro-high"
   max_retries: 3
@@ -15,7 +15,7 @@ wecom:
 
 # Task Scheduling Configuration
 tasks:
-  daily_limit: 10          # Maximum repos to analyze per day
+  daily_limit: 5          # Maximum repos to analyze per day
   weekly_limit: 25        # Maximum repos to analyze per week
   daily_hour: 10          # Hour to run daily task (0-23)
   weekly_day: 5           # Day of week for weekly task (0=Monday, 6=Sunday)
