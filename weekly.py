@@ -12,6 +12,20 @@ from src.weekly_reporter import WeeklyReporter
 from src.wecom_notifier import WeComNotifier
 
 
+def compose_weekly_history(report: str, summary: str) -> str:
+    """Compose a single markdown file for local weekly history."""
+    footer = "\n---\n⏰ 由GitHub-Trend-Bot自动推送"
+    report_without_footer = report.rsplit(footer, 1)[0] if footer in report else report
+    summary_without_footer = summary.rsplit(footer, 1)[0] if footer in summary else summary
+
+    return "\n".join([
+        report_without_footer,
+        "\n---\n",
+        summary_without_footer,
+        footer
+    ])
+
+
 def setup_logging(config: dict):
     """Setup logging configuration"""
     log_config = config.get('logging', {})
@@ -80,7 +94,9 @@ def run_weekly_task(config: dict, dry_run: bool = False, week_start: date = None
     try:
         # Generate report
         max_projects = config['tasks']['weekly_limit']
-        report = reporter.generate_report(week_start, week_end, max_projects)
+        report_package = reporter.generate_report_package(week_start, week_end, max_projects)
+        report = report_package["report"]
+        summary = report_package["summary"]
 
         logger.info("Weekly report generated")
 
@@ -88,23 +104,37 @@ def run_weekly_task(config: dict, dry_run: bool = False, week_start: date = None
         history_dir = Path("history")
         history_dir.mkdir(exist_ok=True)
         history_file = history_dir / f"{week_end.isoformat()}-weekly.md"
+        history_content = compose_weekly_history(report, summary)
 
         try:
             with open(history_file, 'w', encoding='utf-8') as f:
-                f.write(report)
+                f.write(history_content)
             logger.info(f"✓ Weekly report saved to {history_file}")
         except Exception as e:
             logger.error(f"Failed to save history: {e}")
 
         if dry_run:
-            print("\n🔍 DRY RUN - Would send the following report:\n")
-            print(report)
+            trend_message, summary_message = notifier.format_weekly_push_messages(
+                report,
+                week_start,
+                week_end,
+                summary
+            )
+            print("\n🔍 DRY RUN - Weekly trend message:\n")
+            print(trend_message)
+            print("\n🔍 DRY RUN - Weekly summary message:\n")
+            print(summary_message)
         else:
-            success = notifier.send_weekly_report(report)
+            success = notifier.send_weekly_report_split(
+                report,
+                week_start,
+                week_end,
+                summary
+            )
             if success:
-                logger.info("✓ Weekly report sent successfully")
+                logger.info("✓ Weekly split report sent successfully")
             else:
-                logger.error("✗ Failed to send weekly report")
+                logger.error("✗ Failed to send split weekly report")
 
     except Exception as e:
         logger.error(f"Weekly task failed: {e}", exc_info=True)

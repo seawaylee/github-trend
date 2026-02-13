@@ -121,6 +121,98 @@ def test_send_daily_report_split(mock_requests):
     assert mock_requests.post.call_count == 2
 
 
+def test_format_weekly_push_messages_split():
+    """Test weekly push messages are split into trend and summary sections"""
+    notifier = WeComNotifier("https://test.webhook.url")
+
+    weekly_report = """📊 **本周AI趋势周报**\n\n📅 2026-02-09 ~ 2026-02-13\n\n## 📈 本周概览\n- 发现 **2** 个AI相关项目"""
+    weekly_summary = """## 本周趋势总结\n\n本周重点方向是 Agent 与 LLM 工程化。\n\n🚀 **搜狐业务价值分析**\n\n- 搜索引擎：可用于摘要和检索增强。"""
+
+    trend_message, summary_message = notifier.format_weekly_push_messages(
+        weekly_report,
+        date(2026, 2, 9),
+        date(2026, 2, 13),
+        weekly_summary
+    )
+
+    assert "本周AI趋势周报" in trend_message
+    assert "📝 **AI智能总结 & 业务价值分析**" not in trend_message
+    assert "📝 **AI智能总结 & 业务价值分析**" in summary_message
+    assert "搜狐业务价值分析" in summary_message
+
+
+def test_send_weekly_report_split(mock_requests):
+    """Test sending split weekly report to WeCom"""
+    notifier = WeComNotifier("https://test.webhook.url")
+
+    success = notifier.send_weekly_report_split(
+        "📊 **本周AI趋势周报**",
+        date(2026, 2, 9),
+        date(2026, 2, 13),
+        "## 本周趋势总结\n\n测试内容"
+    )
+
+    assert success is True
+    assert mock_requests.post.call_count == 2
+
+
+def test_send_markdown_retries_with_shorter_content_on_api_error():
+    """Should auto-shorten and retry once when WeCom API returns an error."""
+    with patch('src.wecom_notifier.requests') as mock_requests_lib:
+        first = Mock()
+        first.status_code = 200
+        first.raise_for_status.return_value = None
+        first.json.return_value = {"errcode": 45002, "errmsg": "content too long"}
+
+        second = Mock()
+        second.status_code = 200
+        second.raise_for_status.return_value = None
+        second.json.return_value = {"errcode": 0, "errmsg": "ok"}
+
+        mock_requests_lib.post.side_effect = [first, second]
+
+        notifier = WeComNotifier("https://test.webhook.url")
+        success = notifier.send_markdown("A" * 6000)
+
+        assert success is True
+        assert mock_requests_lib.post.call_count == 2
+
+        first_payload = mock_requests_lib.post.call_args_list[0][1]["json"]["markdown"]["content"]
+        second_payload = mock_requests_lib.post.call_args_list[1][1]["json"]["markdown"]["content"]
+
+        assert len(second_payload.encode("utf-8")) < len(first_payload.encode("utf-8"))
+        assert "自动精简重发" in second_payload
+
+
+def test_format_daily_top_message_rewrites_unavailable_reason():
+    """Fallback english reason should be rewritten to readable Chinese highlight."""
+    notifier = WeComNotifier("https://test.webhook.url")
+
+    projects_with_reasons = [
+        (
+            TrendingProject(
+                repo_name="test/agent-repo",
+                description="An autonomous AI agent for productivity",
+                language="Python",
+                url="https://github.com/test/agent-repo",
+                stars=888,
+                stars_growth=88,
+                ranking=1
+            ),
+            FilterResult(is_ai_related=True, reason="Keyword-based detection (LLM unavailable)")
+        )
+    ]
+
+    message = notifier._format_daily_top_message(
+        projects_with_reasons,
+        date(2026, 2, 12),
+        for_push=False
+    )
+
+    assert "LLM unavailable" not in message
+    assert "基于项目描述中的关键词判定" in message
+
+
 def test_split_messages_respect_wecom_markdown_limit():
     """Test split messages stay within WeCom markdown length limit"""
     notifier = WeComNotifier("https://test.webhook.url")

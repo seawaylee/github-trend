@@ -110,7 +110,7 @@ class AIFilter:
             is_ai = self._keyword_fallback(project.description + " " + project.repo_name)
             return FilterResult(
                 is_ai_related=is_ai,
-                reason="Keyword-based detection (LLM unavailable)"
+                reason="基于项目描述中的关键词判定（LLM暂不可用）"
             )
 
     def _keyword_fallback(self, text: str) -> bool:

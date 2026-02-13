@@ -14,6 +14,8 @@ logger = logging.getLogger(__name__)
 class WeComNotifier:
     """WeCom webhook notifier"""
     PUSH_MARKDOWN_LIMIT = 3800
+    RETRY_SHRINK_LIMIT = 2500
+    SUMMARY_CONTENT_LIMIT = 2600
 
     def __init__(self, webhook_url: str):
         """
@@ -34,6 +36,32 @@ class WeComNotifier:
         Returns:
             True if successful
         """
+        message = self._fit_markdown_limit(content)
+        success, result = self._send_markdown_once(message)
+        if success:
+            logger.info("Message sent successfully to WeCom")
+            return True
+
+        if result is None:
+            return False
+
+        # If WeCom rejects content, auto-shorten and retry once.
+        shrunk_message = self._shrink_for_retry(message)
+        if shrunk_message == message:
+            logger.error(f"WeCom API error: {result}")
+            return False
+
+        logger.warning(f"WeCom API error: {result}. Retrying with shorter content...")
+        retry_success, retry_result = self._send_markdown_once(shrunk_message)
+        if retry_success:
+            logger.info("Message sent successfully to WeCom (shortened retry)")
+            return True
+
+        logger.error(f"WeCom API error after shortened retry: {retry_result}")
+        return False
+
+    def _send_markdown_once(self, content: str) -> tuple[bool, dict | None]:
+        """Send one markdown request and return (success, api_result)."""
         payload = {
             "msgtype": "markdown",
             "markdown": {
@@ -44,18 +72,11 @@ class WeComNotifier:
         try:
             response = requests.post(self.webhook_url, json=payload, timeout=10)
             response.raise_for_status()
-
             result = response.json()
-            if result.get('errcode') == 0:
-                logger.info("Message sent successfully to WeCom")
-                return True
-            else:
-                logger.error(f"WeCom API error: {result}")
-                return False
-
+            return result.get('errcode') == 0, result
         except requests.RequestException as e:
             logger.error(f"Failed to send WeCom message: {e}")
-            return False
+            return False, None
 
     def format_daily_report(
         self,
@@ -117,6 +138,40 @@ class WeComNotifier:
         time.sleep(1)
         return self.send_markdown(summary_message)
 
+    def format_weekly_push_messages(
+        self,
+        report_content: str,
+        week_start: date,
+        week_end: date,
+        summary: str = ""
+    ) -> tuple[str, str]:
+        """Format two weekly messages: trend report + summary/business analysis."""
+        trend_message = self._fit_markdown_limit(report_content)
+        summary_message = self._format_weekly_summary_message(week_start, week_end, summary)
+        return trend_message, summary_message
+
+    def send_weekly_report_split(
+        self,
+        report_content: str,
+        week_start: date,
+        week_end: date,
+        summary: str = ""
+    ) -> bool:
+        """Send weekly report as two WeCom markdown messages."""
+        trend_message, summary_message = self.format_weekly_push_messages(
+            report_content,
+            week_start,
+            week_end,
+            summary
+        )
+
+        if not self.send_markdown(trend_message):
+            return False
+
+        # Avoid hitting bot webhook rate limits with immediate back-to-back calls.
+        time.sleep(1)
+        return self.send_markdown(summary_message)
+
     def _format_daily_top_message(
         self,
         projects_with_reasons: List[tuple[TrendingProject, FilterResult]],
@@ -141,7 +196,8 @@ class WeComNotifier:
             max_desc_length = 80 if for_push else 100
             max_reason_length = 120 if for_push else 1200
             short_desc = self._truncate_text(project.description, max_desc_length)
-            short_reason = self._truncate_text(result.reason, max_reason_length)
+            normalized_reason = self._normalize_ai_highlight(result.reason, project.description)
+            short_reason = self._truncate_text(normalized_reason, max_reason_length)
 
             lines.extend([
                 f"\n{emoji} **{project.repo_name}** ⭐ {stars_str} ({growth_str})",
@@ -157,7 +213,7 @@ class WeComNotifier:
 
     def _format_daily_summary_message(self, report_date: date, summary: str, for_push: bool = True) -> str:
         """Format summary/business analysis message in markdown."""
-        summary_content = summary.strip() if summary and summary.strip() else "（生成总结失败）"
+        summary_content = self._prepare_summary_content(summary)
 
         lines = [
             "📝 **AI智能总结 & 业务价值分析**",
@@ -168,6 +224,78 @@ class WeComNotifier:
         ]
         message = "\n".join(lines)
         return self._fit_markdown_limit(message) if for_push else message
+
+    def _format_weekly_summary_message(
+        self,
+        week_start: date,
+        week_end: date,
+        summary: str,
+        for_push: bool = True
+    ) -> str:
+        """Format weekly summary/business analysis message in markdown."""
+        summary_content = self._prepare_summary_content(summary)
+
+        lines = [
+            "📝 **AI智能总结 & 业务价值分析**",
+            f"\n📅 {week_start.strftime('%Y-%m-%d')} ~ {week_end.strftime('%Y-%m-%d')}",
+            "\n---\n",
+            summary_content,
+            "\n---\n⏰ 由GitHub-Trend-Bot自动推送"
+        ]
+        message = "\n".join(lines)
+        return self._fit_markdown_limit(message) if for_push else message
+
+    def _prepare_summary_content(self, summary: str) -> str:
+        """Normalize summary and keep it within a stable size budget."""
+        content = summary.strip() if summary and summary.strip() else "（生成总结失败）"
+        if len(content.encode("utf-8")) <= self.SUMMARY_CONTENT_LIMIT:
+            return content
+
+        suffix = "\n\n（总结较长，已自动精简）"
+        suffix_bytes = len(suffix.encode("utf-8"))
+        allowed = self.SUMMARY_CONTENT_LIMIT - suffix_bytes
+        if allowed <= 0:
+            return self._truncate_by_bytes(content, self.SUMMARY_CONTENT_LIMIT)
+        return self._truncate_by_bytes(content, allowed) + suffix
+
+    def _shrink_for_retry(self, content: str) -> str:
+        """Shrink markdown for one retry attempt after API rejection."""
+        content_bytes = len(content.encode("utf-8"))
+        if content_bytes <= self.RETRY_SHRINK_LIMIT:
+            return content
+
+        suffix = "\n\n（首次推送失败，已自动精简重发）"
+        suffix_bytes = len(suffix.encode("utf-8"))
+        allowed = self.RETRY_SHRINK_LIMIT - suffix_bytes
+        if allowed <= 0:
+            return self._truncate_by_bytes(content, self.RETRY_SHRINK_LIMIT)
+        return self._truncate_by_bytes(content, allowed) + suffix
+
+    @staticmethod
+    def _normalize_ai_highlight(reason: str, description: str = "") -> str:
+        """Rewrite unreadable fallback reasons into a user-facing Chinese highlight."""
+        normalized = (reason or "").strip()
+        lower_reason = normalized.lower()
+
+        fallback_markers = (
+            "keyword-based detection",
+            "keyword based detection",
+            "llm unavailable"
+        )
+        if not normalized or any(marker in lower_reason for marker in fallback_markers):
+            desc_text = (description or "").lower()
+            if any(kw in desc_text for kw in ("agent", "assistant", "copilot", "workflow")):
+                area = "AI Agent/智能助手方向"
+            elif any(kw in desc_text for kw in ("llm", "gpt", "chat", "rag", "prompt")):
+                area = "LLM 应用方向"
+            elif any(kw in desc_text for kw in ("vision", "image", "video", "multimodal")):
+                area = "多模态/视觉方向"
+            else:
+                area = "AI 应用或工具方向"
+
+            return f"基于项目描述中的关键词判定，该项目与 {area}相关，建议后续结合 README 做进一步复核。"
+
+        return normalized
 
     def _format_daily_message(
         self,

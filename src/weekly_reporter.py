@@ -2,7 +2,6 @@
 import logging
 from datetime import date
 from typing import List, Dict
-from collections import Counter
 from openai import OpenAI
 from src.database import Database
 
@@ -59,11 +58,31 @@ class WeeklyReporter:
         Returns:
             Formatted markdown report
         """
+        report_package = self.generate_report_package(week_start, week_end, max_projects)
+        return report_package["report"]
+
+    def generate_report_package(
+        self,
+        week_start: date,
+        week_end: date,
+        max_projects: int = 25
+    ) -> Dict[str, str]:
+        """
+        Generate weekly report + standalone summary for split push.
+
+        Returns:
+            Dict with keys:
+            - report: Top projects + trend analysis
+            - summary: AI summary and business value analysis content
+        """
         # Fetch weekly trends
         trends = self.db.get_weekly_trends(week_start, week_end)
 
         if not trends:
-            return self._format_empty_report(week_start, week_end)
+            return {
+                "report": self._format_empty_report(week_start, week_end),
+                "summary": self._format_empty_summary()
+            }
 
         # Deduplicate (keep highest stars for each project)
         unique_projects = self._deduplicate_projects(trends)
@@ -73,6 +92,7 @@ class WeeklyReporter:
 
         # Generate LLM analysis
         tech_trends = self._analyze_trends(top_projects)
+        weekly_summary = self._analyze_weekly_summary(top_projects, tech_trends)
 
         # Format report
         report = self._format_report(
@@ -82,7 +102,10 @@ class WeeklyReporter:
             tech_trends
         )
 
-        return report
+        return {
+            "report": report,
+            "summary": weekly_summary
+        }
 
     def _deduplicate_projects(self, trends: List[Dict]) -> List[Dict]:
         """Deduplicate projects, keeping highest stars"""
@@ -105,7 +128,9 @@ class WeeklyReporter:
         # Prepare project summary
         summary = []
         for p in projects[:10]:  # Analyze top 10
-            summary.append(f"- {p['repo_name']}: {p['description']} ({p['language']})")
+            summary.append(
+                f"- {p['repo_name']}: {p.get('description') or ''} ({p.get('language') or 'Unknown'})"
+            )
 
         prompt = f"""分析以下本周GitHub AI趋势项目，总结技术趋势和热点方向（2-3条要点）：
 
@@ -129,6 +154,82 @@ class WeeklyReporter:
         except Exception as e:
             logger.warning(f"LLM trend analysis failed: {e}")
             return "本周AI项目持续活跃，涵盖多个技术方向。"
+
+    def _analyze_weekly_summary(self, projects: List[Dict], tech_trends: str) -> str:
+        """Generate weekly AI summary and business value analysis."""
+        if not projects:
+            return self._format_empty_summary()
+
+        project_lines = []
+        for idx, project in enumerate(projects[:8], 1):
+            project_lines.append(
+                f"{idx}. {project['repo_name']}: {project.get('description') or ''} "
+                f"(Language: {project.get('language') or 'Unknown'})"
+            )
+
+        prompt = f"""分析以下本周GitHub热门AI项目列表：
+
+{chr(10).join(project_lines)}
+
+补充技术趋势参考：
+{tech_trends}
+
+请完成以下任务：
+1. 给出“本周趋势总结”（一段话，聚焦核心技术方向和变化）。
+2. 评估这些项目对搜狐业务的价值，重点覆盖搜索引擎、推荐系统、AI基础设施（训练/推理/部署）。
+   - 仅在确实相关时给出项目与收益说明，不要编造。
+
+输出要求：
+- 使用 Markdown。
+- 必须包含标题“## 本周趋势总结”。
+- 必须包含标题“🚀 **搜狐业务价值分析**”。
+"""
+
+        try:
+            response = self.llm.chat.completions.create(
+                model=self.model,
+                messages=[
+                    {"role": "system", "content": "你是资深AI技术战略分析师，擅长技术趋势和业务价值评估。"},
+                    {"role": "user", "content": prompt}
+                ],
+                temperature=0.4,
+                max_tokens=700
+            )
+            summary_text = response.choices[0].message.content.strip()
+            return self._ensure_summary_sections(summary_text, projects)
+        except Exception as e:
+            logger.warning(f"LLM weekly summary failed: {e}")
+            return self._build_fallback_summary(projects)
+
+    def _ensure_summary_sections(self, summary_text: str, projects: List[Dict]) -> str:
+        """Ensure summary contains required markdown sections."""
+        content = (summary_text or "").strip()
+        if not content:
+            return self._build_fallback_summary(projects)
+
+        if "本周趋势总结" not in content:
+            content = f"## 本周趋势总结\n\n{content}"
+
+        if "搜狐业务价值分析" not in content:
+            content = (
+                f"{content}\n\n"
+                "🚀 **搜狐业务价值分析**\n\n"
+                "- 暂未识别到直接可落地的业务价值，建议持续观察。"
+            )
+
+        return content
+
+    def _build_fallback_summary(self, projects: List[Dict]) -> str:
+        """Build stable weekly summary when LLM output is unavailable."""
+        top_names = "、".join([p["repo_name"] for p in projects[:3]]) or "本周上榜项目"
+        return (
+            "## 本周趋势总结\n\n"
+            f"本周热点主要集中在 Agent、LLM 应用与工程工具链，代表项目包括：{top_names}。\n\n"
+            "🚀 **搜狐业务价值分析**\n\n"
+            "- 搜索引擎：优先验证检索增强、结果摘要与结构化信息抽取。\n"
+            "- 推荐系统：可用于内容标签补全、冷启动特征生成与重排优化。\n"
+            "- AI基础设施：建议推进统一模型网关、推理成本治理与多模型容灾。"
+        )
 
     def _categorize_projects(self, projects: List[Dict]) -> Dict[str, int]:
         """Categorize projects by technology area"""
@@ -181,9 +282,13 @@ class WeeklyReporter:
 
         # Top 10 projects
         for idx, p in enumerate(projects[:10], 1):
+            description = p.get('description') or ''
+            raw_highlight = p.get('ai_relevance_reason') or ""
+            ai_highlight = self._normalize_ai_highlight(raw_highlight, description)
             lines.extend([
                 f"{idx}. **{p['repo_name']}** ⭐ {p['stars']:,} (+{p['stars_growth']})",
-                f"   📝 {p['description'][:80]}..." if len(p['description']) > 80 else f"   📝 {p['description']}",
+                f"   📝 {self._truncate_text(description, 80)}",
+                f"   💡 AI亮点：{self._truncate_text(ai_highlight, 120)}",
                 f"   🔗 [查看项目]({p['url']})\n"
             ])
 
@@ -213,6 +318,47 @@ class WeeklyReporter:
 
 ---
 ⏰ 由GitHub-Trend-Bot自动推送"""
+
+    @staticmethod
+    def _format_empty_summary() -> str:
+        """Fallback summary when no weekly data."""
+        return (
+            "## 本周趋势总结\n\n"
+            "本周暂无可分析的AI趋势项目。\n\n"
+            "🚀 **搜狐业务价值分析**\n\n"
+            "- 暂无可评估的项目。"
+        )
+
+    @staticmethod
+    def _truncate_text(text: str, max_length: int) -> str:
+        """Truncate text with ellipsis when necessary."""
+        if len(text) <= max_length:
+            return text
+        return text[:max_length] + "..."
+
+    @staticmethod
+    def _normalize_ai_highlight(reason: str, description: str = "") -> str:
+        """Rewrite fallback/technical reasons into readable Chinese highlight."""
+        normalized = (reason or "").strip()
+        lower_reason = normalized.lower()
+        fallback_markers = (
+            "keyword-based detection",
+            "keyword based detection",
+            "llm unavailable"
+        )
+        if not normalized or any(marker in lower_reason for marker in fallback_markers):
+            desc_text = (description or "").lower()
+            if any(kw in desc_text for kw in ("agent", "assistant", "copilot", "workflow")):
+                area = "AI Agent/智能助手方向"
+            elif any(kw in desc_text for kw in ("llm", "gpt", "chat", "rag", "prompt")):
+                area = "LLM 应用方向"
+            elif any(kw in desc_text for kw in ("vision", "image", "video", "multimodal")):
+                area = "多模态/视觉方向"
+            else:
+                area = "AI 应用或工具方向"
+            return f"基于项目描述中的关键词判定，该项目与 {area}相关，建议后续结合 README 做进一步复核。"
+
+        return normalized
 
     def _get_category_emoji(self, category: str) -> str:
         """Get emoji for category"""
