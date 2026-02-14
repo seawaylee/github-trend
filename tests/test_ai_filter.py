@@ -106,3 +106,34 @@ def test_generate_daily_summary_filters_meta_leakage():
         assert "skill.md" not in summary.lower()
         assert "每日趋势总结" in summary
         assert "搜狐业务价值分析" in summary
+        assert filter.last_summary_had_llm_failure is True
+
+
+def test_is_ai_related_marks_llm_failure_when_fallback_used():
+    """When LLM call fails, filter should mark failure and fallback to keywords."""
+    with patch('src.ai_filter.OpenAI') as mock:
+        client = Mock()
+        mock.return_value = client
+        client.chat.completions.create.side_effect = RuntimeError("llm down")
+
+        filter = AIFilter(
+            base_url="http://localhost:8045",
+            api_key="sk-test",
+            model="gemini-3-pro-high"
+        )
+
+        project = TrendingProject(
+            repo_name="test/llm-agent",
+            description="An LLM agent framework",
+            language="Python",
+            url="https://github.com/test/llm-agent",
+            stars=1000,
+            stars_growth=100,
+            ranking=1
+        )
+
+        result = filter.is_ai_related(project)
+
+        assert result.is_ai_related is True
+        assert "关键词" in result.reason
+        assert filter.last_filter_had_llm_failure is True

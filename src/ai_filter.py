@@ -58,6 +58,9 @@ class AIFilter:
         normalized_base_url = _normalize_base_url(base_url)
         self.client = OpenAI(base_url=normalized_base_url, api_key=api_key)
         self.model = model
+        # Per-run health flags. main.py uses them to decide whether to push.
+        self.last_filter_had_llm_failure = False
+        self.last_summary_had_llm_failure = False
 
     def is_ai_related(self, project: TrendingProject) -> FilterResult:
         """
@@ -105,6 +108,7 @@ class AIFilter:
             )
 
         except Exception as e:
+            self.last_filter_had_llm_failure = True
             logger.warning(f"LLM filter failed for {project.repo_name}, using keyword fallback: {e}")
             # Fallback to keyword matching
             is_ai = self._keyword_fallback(project.description + " " + project.repo_name)
@@ -128,6 +132,7 @@ class AIFilter:
         Returns:
             List of (project, result) tuples for AI-related projects
         """
+        self.last_filter_had_llm_failure = False
         results = []
 
         for project in projects:
@@ -150,6 +155,7 @@ class AIFilter:
         Returns:
             Summary text
         """
+        self.last_summary_had_llm_failure = False
         if not projects:
             return ""
 
@@ -188,10 +194,12 @@ class AIFilter:
             )
             summary_text = response.choices[0].message.content.strip()
             if self._is_invalid_summary(summary_text):
+                self.last_summary_had_llm_failure = True
                 logger.warning("LLM summary flagged as invalid/meta content, using fallback summary")
                 return self._build_fallback_summary(projects)
             return summary_text
         except Exception as e:
+            self.last_summary_had_llm_failure = True
             logger.error(f"Failed to generate summary: {e}")
             return self._build_fallback_summary(projects)
 

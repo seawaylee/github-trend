@@ -113,10 +113,12 @@ def run_daily_task(config: dict, dry_run: bool = False):
         ai_projects = ai_filter.batch_filter(all_projects)
         logger.info(f"Found {len(ai_projects)} AI-related projects")
 
+        if ai_filter.last_filter_had_llm_failure:
+            logger.warning("LLM filter failed in this run, skip push")
+            return
+
         if not ai_projects:
-            logger.warning("No AI projects found today")
-            if not dry_run:
-                notifier.send_markdown("⚠️ 今日未发现AI相关趋势项目")
+            logger.warning("No AI projects found today, skip push")
             return
 
         # Select Top5 while excluding repos pushed in last 7 days.
@@ -129,9 +131,7 @@ def run_daily_task(config: dict, dry_run: bool = False):
         )
 
         if not top_projects:
-            logger.warning("No new projects to push after 7-day de-duplication")
-            if not dry_run:
-                notifier.send_markdown("⚠️ 今日候选项目均在最近7天内已推送，已自动跳过。")
+            logger.warning("No new projects to push after 7-day de-duplication, skip push")
             return
 
         # Save to database
@@ -162,6 +162,9 @@ def run_daily_task(config: dict, dry_run: bool = False):
         # Generate summary
         logger.info("Generating daily summary and business analysis...")
         summary = ai_filter.generate_daily_summary(top_projects)
+        if ai_filter.last_summary_had_llm_failure:
+            logger.warning("LLM summary failed in this run, skip push")
+            return
 
         # Generate report content
         report_content = notifier.format_daily_report(top_projects, today, summary)
