@@ -3,15 +3,25 @@
 
 # AI Service Configuration (OpenRouter-compatible endpoint)
 ai:
-  base_url: "http://127.0.0.1:8045/v1"
+  base_url: "https://gmn.chuangzuoli.com"
   api_key: "your-api-key-here"
-  model: "gemini-3-pro-high"
+  model: "gpt-5.4"
   max_retries: 3
-  timeout: 30
+  timeout: 120
 
 # WeCom (WeChat Work) Configuration
 wecom:
   webhook_url: "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=YOUR-WEBHOOK-KEY"
+
+# Optional OpenClaw / Feishu attachment delivery
+openclaw:
+  enabled: false
+  channel: "feishu"
+  account: "sohu"
+  target: "user:your_feishu_open_id"
+  title: "GitHub AI 趋势日报（自动推送）"
+  timeout: 60
+  helper_script: "/Users/you/app/git/stock-daily-report/scripts/openclaw_feishu_skill.sh"
 
 # Task Scheduling Configuration
 tasks:

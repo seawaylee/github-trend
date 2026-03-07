@@ -11,9 +11,9 @@ def test_load_valid_config():
         config_file = Path(tmpdir) / "config.yaml"
         config_file.write_text("""
 ai:
-  base_url: "http://127.0.0.1:8045"
+  base_url: "https://gmn.chuangzuoli.com"
   api_key: "sk-test"
-  model: "gemini-3-pro-high"
+  model: "gpt-5.4"
 wecom:
   webhook_url: "https://qyapi.weixin.qq.com/test"
 tasks:
@@ -27,7 +27,7 @@ logging:
   file: "logs/app.log"
 """)
         config = load_config(str(config_file))
-        assert config['ai']['model'] == 'gemini-3-pro-high'
+        assert config['ai']['model'] == 'gpt-5.4'
         assert config['tasks']['daily_limit'] == 5
 
 

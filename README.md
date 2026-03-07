@@ -6,7 +6,7 @@ An automated tool that tracks trending GitHub repositories, filters for AI-relat
 
 - **Daily Trends**: Fetches top trending repositories daily and pushes the top 5 AI-related projects.
 - **Weekly Summary**: Generates a weekly summary of the top 25 AI projects every Friday.
-- **AI Filtering**: Uses a local LLM service (OpenAI API compatible) to analyze repository descriptions and READMEs to identify genuine AI projects.
+- **AI Filtering**: Uses the shared `llm_client.py` text LLM capability to analyze repository descriptions and READMEs to identify genuine AI projects.
 - **Automated Reporting**: Sends formatted reports directly to WeCom group chats via Webhook.
 
 ## Prerequisites
@@ -56,9 +56,9 @@ An automated tool that tracks trending GitHub repositories, filters for AI-relat
 Edit `config/config.yaml` to match your environment:
 
 ### AI Service
-- `base_url`: URL of your LLM service (e.g., `http://127.0.0.1:8045/v1` for local proxy)
+- `base_url`: URL of your LLM service (default recommendation: `https://gmn.chuangzuoli.com`)
 - `api_key`: API Key for the service
-- `model`: Model name to use (e.g., `gemini-3-pro-high`)
+- `model`: Model name to use (default recommendation: `gpt-5.4`)
 
 ### WeCom
 - `webhook_url`: The Webhook URL provided by WeCom bot
@@ -90,7 +90,7 @@ python weekly.py --dry-run
 ## Troubleshooting
 
 - **"Connection refused"**:
-  - Ensure your local LLM service is running and accessible at the `base_url` specified in config.
+  - Ensure the configured LLM endpoint is reachable, and the shared client can access the `base_url` specified in config.
 
 - **"No AI projects found"**:
   - Check if your LLM API key is valid.

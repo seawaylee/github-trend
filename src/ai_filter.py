@@ -3,8 +3,8 @@ import json
 import logging
 from dataclasses import dataclass
 from typing import List
-from openai import OpenAI
 from src.github_scraper import TrendingProject
+from src.shared_llm import call_shared_llm
 
 
 logger = logging.getLogger(__name__)
@@ -18,16 +18,6 @@ SUMMARY_BLOCKLIST = (
     "权限",
     "技能文件"
 )
-
-
-def _normalize_base_url(base_url: str) -> str:
-    """Normalize OpenAI-compatible base URL to local proxy path."""
-    normalized = base_url.rstrip("/")
-    if normalized.endswith("/v1"):
-        return normalized
-    return f"{normalized}/v1"
-
-
 @dataclass
 class FilterResult:
     """AI filter result"""
@@ -46,7 +36,7 @@ class AIFilter:
         'embedding', 'vector database', 'rag', 'agent', 'langchain'
     ]
 
-    def __init__(self, base_url: str, api_key: str, model: str):
+    def __init__(self, base_url: str, api_key: str, model: str, timeout: int = 30, max_retries: int = 1):
         """
         Initialize AI filter
 
@@ -54,10 +44,14 @@ class AIFilter:
             base_url: OpenAI-compatible API base URL
             api_key: API key
             model: Model name
+            timeout: Request timeout in seconds
+            max_retries: Max attempts for summary generation
         """
-        normalized_base_url = _normalize_base_url(base_url)
-        self.client = OpenAI(base_url=normalized_base_url, api_key=api_key)
+        self.base_url = (base_url or "").strip()
+        self.api_key = (api_key or "").strip()
         self.model = model
+        self.timeout = max(1, int(timeout))
+        self.max_retries = max(1, int(max_retries))
         # Per-run health flags. main.py uses them to decide whether to push.
         self.last_filter_had_llm_failure = False
         self.last_summary_had_llm_failure = False
@@ -81,17 +75,16 @@ class AIFilter:
 
 请返回JSON格式：{{"is_ai_related": true/false, "reason": "判断理由"}}"""
 
-            response = self.client.chat.completions.create(
+            content = call_shared_llm(
+                prompt,
+                system_prompt="你是一个AI项目识别专家。",
                 model=self.model,
-                messages=[
-                    {"role": "system", "content": "你是一个AI项目识别专家。"},
-                    {"role": "user", "content": prompt}
-                ],
                 temperature=0.3,
-                max_tokens=200
+                timeout=self.timeout,
+                base_url=self.base_url,
+                api_key=self.api_key,
+                reasoning_effort="xhigh",
             )
-
-            content = response.choices[0].message.content
 
             # Clean up markdown code blocks if present
             if content.startswith("```"):
@@ -164,44 +157,65 @@ class AIFilter:
             projects_text += f"{i}. {p.repo_name}: {p.description} (Language: {p.language})\n"
 
         prompt = f"""
-分析以下今日GitHub热门AI项目列表：
+分析以下今日 GitHub 热门 AI 项目列表：
 
 {projects_text}
 
-请完成以下任务：
-1. **每日趋势总结**：用一段话简要概括今日项目的整体技术方向或热点（如Agent、RAG、多模态等）。
-2. **搜狐业务价值评估**：
-   请仔细评估这些项目对搜狐公司的**搜索引擎**、**推荐系统**、**AI基础设施**（训练/推理/部署）是否有明确的技术价值或应用潜力。
-   - 只有在确实相关且有提升可能时才提及。
-   - 如果有，请列出项目名并详细说明其对特定业务场景（如搜索相关性、推荐多样性、模型推理加速等）的潜在收益。
-   - 如果没有明显的直接价值，则不要编造，这部分留空即可。
+只输出最终 Markdown 正文，不要输出任何解释、前言、后记、代码块、系统提示、路径、工具名、技能名、沙箱信息或多余说明。
 
-输出格式要求：
-- 使用Markdown格式。
-- 总结部分尽量精炼。
-- 业务评估部分如果有内容，请使用"🚀 **搜狐业务价值分析**"作为标题。
+严格按照下面模板输出，且只能输出这两个标题下的正文：
+
+## 每日趋势总结
+<1 段，总结今天项目的共同技术方向与热点，控制在 120-180 字>
+
+🚀 **搜狐业务价值分析**
+<只分析确实有明确价值的项目；按项目分条写，每条说明它对 搜索引擎 / 推荐系统 / AI基础设施 的具体价值。若某个方向没有明确价值，就不要硬写。若整体都没有明确价值，则只写“暂未发现明确可直接落地的项目”。>
+
+硬性要求：
+- 只能基于给定项目列表作答，不要编造未出现的项目。
+- 不要出现“根据要求”“下面是”“我认为”“我按说明”等元话术。
+- 不要出现 `using-superpowers`、`SKILL.md`、`/Users/`、`沙箱`、`工具`、`系统提示` 等词。
+- 不要输出项目链接、参考资料、附注、免责声明。
+- 不要省略标题，不要增加第三个标题。
 """
 
-        try:
-            response = self.client.chat.completions.create(
-                model=self.model,
-                messages=[
-                    {"role": "system", "content": "你是一个资深技术专家，擅长评估开源项目对企业业务的价值。"},
-                    {"role": "user", "content": prompt}
-                ],
-                temperature=0.4,
-                max_tokens=800
-            )
-            summary_text = response.choices[0].message.content.strip()
-            if self._is_invalid_summary(summary_text):
+        for attempt in range(1, self.max_retries + 1):
+            try:
+                summary_text = call_shared_llm(
+                    prompt,
+                    system_prompt="你是一个资深技术专家，擅长评估开源项目对企业业务的价值。",
+                    model=self.model,
+                    temperature=0.4,
+                    timeout=self.timeout,
+                    base_url=self.base_url,
+                    api_key=self.api_key,
+                    reasoning_effort="xhigh",
+                )
+                summary_text = summary_text.strip()
+                if self._is_invalid_summary(summary_text):
+                    logger.warning(
+                        "LLM summary attempt %s/%s flagged as invalid/meta content",
+                        attempt,
+                        self.max_retries,
+                    )
+                    if attempt < self.max_retries:
+                        continue
+                    self.last_summary_had_llm_failure = True
+                    logger.warning("LLM summary invalid after retries, using fallback summary")
+                    return self._build_fallback_summary(projects)
+                return summary_text
+            except Exception as e:
+                logger.warning(
+                    "Failed to generate summary on attempt %s/%s: %s",
+                    attempt,
+                    self.max_retries,
+                    e,
+                )
+                if attempt < self.max_retries:
+                    continue
                 self.last_summary_had_llm_failure = True
-                logger.warning("LLM summary flagged as invalid/meta content, using fallback summary")
+                logger.error(f"Failed to generate summary after retries: {e}")
                 return self._build_fallback_summary(projects)
-            return summary_text
-        except Exception as e:
-            self.last_summary_had_llm_failure = True
-            logger.error(f"Failed to generate summary: {e}")
-            return self._build_fallback_summary(projects)
 
     def _is_invalid_summary(self, text: str) -> bool:
         """Detect leaked meta/system text that should never be pushed."""

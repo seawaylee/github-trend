@@ -2,21 +2,11 @@
 import logging
 from datetime import date
 from typing import List, Dict
-from openai import OpenAI
 from src.database import Database
+from src.shared_llm import call_shared_llm
 
 
 logger = logging.getLogger(__name__)
-
-
-def _normalize_base_url(base_url: str) -> str:
-    """Normalize OpenAI-compatible base URL to local proxy path."""
-    normalized = base_url.rstrip("/")
-    if normalized.endswith("/v1"):
-        return normalized
-    return f"{normalized}/v1"
-
-
 class WeeklyReporter:
     """Generate weekly AI trends report"""
 
@@ -37,8 +27,8 @@ class WeeklyReporter:
             ai_model: LLM model name
         """
         self.db = database
-        normalized_base_url = _normalize_base_url(ai_base_url)
-        self.llm = OpenAI(base_url=normalized_base_url, api_key=ai_api_key)
+        self.ai_base_url = (ai_base_url or "").strip()
+        self.ai_api_key = (ai_api_key or "").strip()
         self.model = ai_model
 
     def generate_report(
@@ -139,17 +129,16 @@ class WeeklyReporter:
 请返回简洁的趋势分析（每条1句话）。"""
 
         try:
-            response = self.llm.chat.completions.create(
+            return call_shared_llm(
+                prompt,
+                system_prompt="你是AI技术趋势分析专家。",
                 model=self.model,
-                messages=[
-                    {"role": "system", "content": "你是AI技术趋势分析专家。"},
-                    {"role": "user", "content": prompt}
-                ],
                 temperature=0.7,
-                max_tokens=300
+                timeout=120,
+                base_url=self.ai_base_url,
+                api_key=self.ai_api_key,
+                reasoning_effort="xhigh",
             )
-
-            return response.choices[0].message.content
 
         except Exception as e:
             logger.warning(f"LLM trend analysis failed: {e}")
@@ -186,16 +175,17 @@ class WeeklyReporter:
 """
 
         try:
-            response = self.llm.chat.completions.create(
+            summary_text = call_shared_llm(
+                prompt,
+                system_prompt="你是资深AI技术战略分析师，擅长技术趋势和业务价值评估。",
                 model=self.model,
-                messages=[
-                    {"role": "system", "content": "你是资深AI技术战略分析师，擅长技术趋势和业务价值评估。"},
-                    {"role": "user", "content": prompt}
-                ],
                 temperature=0.4,
-                max_tokens=700
+                timeout=120,
+                base_url=self.ai_base_url,
+                api_key=self.ai_api_key,
+                reasoning_effort="xhigh",
             )
-            summary_text = response.choices[0].message.content.strip()
+            summary_text = summary_text.strip()
             return self._ensure_summary_sections(summary_text, projects)
         except Exception as e:
             logger.warning(f"LLM weekly summary failed: {e}")
@@ -287,8 +277,8 @@ class WeeklyReporter:
             ai_highlight = self._normalize_ai_highlight(raw_highlight, description)
             lines.extend([
                 f"{idx}. **{p['repo_name']}** ⭐ {p['stars']:,} (+{p['stars_growth']})",
-                f"   📝 {self._truncate_text(description, 80)}",
-                f"   💡 AI亮点：{self._truncate_text(ai_highlight, 120)}",
+                f"   📝 {description}",
+                f"   💡 AI亮点：{ai_highlight}",
                 f"   🔗 [查看项目]({p['url']})\n"
             ])
 
@@ -328,13 +318,6 @@ class WeeklyReporter:
             "🚀 **搜狐业务价值分析**\n\n"
             "- 暂无可评估的项目。"
         )
-
-    @staticmethod
-    def _truncate_text(text: str, max_length: int) -> str:
-        """Truncate text with ellipsis when necessary."""
-        if len(text) <= max_length:
-            return text
-        return text[:max_length] + "..."
 
     @staticmethod
     def _normalize_ai_highlight(reason: str, description: str = "") -> str:
