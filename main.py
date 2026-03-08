@@ -17,6 +17,29 @@ DAILY_PUSH_LIMIT = 5
 RECENT_PUSH_LOOKBACK_DAYS = 7
 
 
+def _notify_agent_llm_failure(
+    openclaw_notifier: OpenClawNotifier,
+    today: date,
+    stage: str,
+) -> None:
+    message = (
+        "⚠️ GitHub Trend 本次未推送\n"
+        f"日期：{today.isoformat()}\n"
+        f"阶段：{stage}\n"
+        "原因：LLM 调用失败，已按策略停止推送。\n"
+        "请检查 GMN Responses API、API Key 与服务状态。"
+    )
+    if not openclaw_notifier.is_enabled:
+        logging.getLogger(__name__).warning(
+            "OpenClaw notifier disabled, cannot notify agent about LLM failure"
+        )
+        return
+    if openclaw_notifier.send_message(message):
+        logging.getLogger(__name__).info("✓ Agent notified about LLM failure")
+    else:
+        logging.getLogger(__name__).error("✗ Failed to notify agent about LLM failure")
+
+
 def setup_logging(config: dict):
     """Setup logging configuration"""
     log_config = config.get('logging', {})
@@ -121,7 +144,10 @@ def run_daily_task(config: dict, dry_run: bool = False):
         logger.info(f"Found {len(ai_projects)} AI-related projects")
 
         if ai_filter.last_filter_had_llm_failure:
-            logger.warning("LLM filter partially failed in this run, continue with fallback results")
+            logger.warning("LLM filter failed in this run, stop push and notify agent")
+            if not dry_run:
+                _notify_agent_llm_failure(openclaw_notifier, today, "AI过滤")
+            return
 
         if not ai_projects:
             logger.warning("No AI projects found today, skip push")
@@ -172,7 +198,10 @@ def run_daily_task(config: dict, dry_run: bool = False):
             logger.warning("Daily summary is empty, skip push")
             return
         if ai_filter.last_summary_had_llm_failure:
-            logger.warning("LLM summary failed, using fallback summary for push")
+            logger.warning("LLM summary failed in this run, stop push and notify agent")
+            if not dry_run:
+                _notify_agent_llm_failure(openclaw_notifier, today, "总结生成")
+            return
 
         # Generate report content
         report_content = notifier.format_daily_report(top_projects, today, summary)

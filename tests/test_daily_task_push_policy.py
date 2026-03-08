@@ -73,7 +73,7 @@ def test_run_daily_task_no_ai_projects_does_not_push(
 @patch("main.AIFilter")
 @patch("main.OpenClawNotifier")
 @patch("main.WeComNotifier")
-def test_run_daily_task_filter_llm_fallback_still_pushes(
+def test_run_daily_task_filter_llm_failure_notifies_agent_and_skips_push(
     mock_notifier_cls,
     mock_openclaw_cls,
     mock_filter_cls,
@@ -94,17 +94,19 @@ def test_run_daily_task_filter_llm_fallback_still_pushes(
     mock_filter.batch_filter.return_value = [_ai_project("org/repo-a")]
     mock_filter.last_filter_had_llm_failure = True
     mock_filter.last_summary_had_llm_failure = False
-    mock_filter.generate_daily_summary.return_value = "summary from fallback-filtered projects"
 
     notifier = mock_notifier_cls.return_value
-    notifier.send_daily_report_split.return_value = True
-    mock_openclaw_cls.from_config.return_value.is_enabled = False
+    openclaw = mock_openclaw_cls.from_config.return_value
+    openclaw.is_enabled = True
+    openclaw.send_message.return_value = True
 
     run_daily_task(_config(), dry_run=False)
 
     notifier.send_markdown.assert_not_called()
-    notifier.send_daily_report_split.assert_called_once()
-    mock_db.save_daily_push_records.assert_called_once()
+    notifier.send_daily_report_split.assert_not_called()
+    openclaw.send_message.assert_called_once()
+    assert "LLM" in openclaw.send_message.call_args.args[0]
+    mock_db.save_daily_push_records.assert_not_called()
 
 
 @patch("main.Database")
@@ -112,7 +114,7 @@ def test_run_daily_task_filter_llm_fallback_still_pushes(
 @patch("main.AIFilter")
 @patch("main.OpenClawNotifier")
 @patch("main.WeComNotifier")
-def test_run_daily_task_summary_llm_fallback_still_pushes(
+def test_run_daily_task_summary_llm_failure_notifies_agent_and_skips_push(
     mock_notifier_cls,
     mock_openclaw_cls,
     mock_filter_cls,
@@ -136,14 +138,17 @@ def test_run_daily_task_summary_llm_fallback_still_pushes(
     mock_filter.generate_daily_summary.return_value = "fallback summary"
 
     notifier = mock_notifier_cls.return_value
-    notifier.send_daily_report_split.return_value = True
-    mock_openclaw_cls.from_config.return_value.is_enabled = False
+    openclaw = mock_openclaw_cls.from_config.return_value
+    openclaw.is_enabled = True
+    openclaw.send_message.return_value = True
 
     run_daily_task(_config(), dry_run=False)
 
     notifier.send_markdown.assert_not_called()
-    notifier.send_daily_report_split.assert_called_once()
-    mock_db.save_daily_push_records.assert_called_once()
+    notifier.send_daily_report_split.assert_not_called()
+    openclaw.send_message.assert_called_once()
+    assert "总结生成" in openclaw.send_message.call_args.args[0]
+    mock_db.save_daily_push_records.assert_not_called()
 
 
 @patch("main.Database")
