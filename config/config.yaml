@@ -1,0 +1,39 @@
+# GitHub AI Trend Tracker Configuration
+# Copy this file to config.yaml and update with your actual values
+
+# AI Service Configuration (OpenRouter-compatible endpoint)
+ai:
+  base_url: "https://gmn.chuangzuoli.com"
+  api_key: "sk-codex-gmn-api"
+  model: "gpt-5.4"
+  max_retries: 3
+  timeout: 120
+
+# WeCom (WeChat Work) Configuration
+wecom:
+  webhook_url: "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=b4a55404-c082-493b-960e-31165b334f9c"
+
+# OpenClaw / Feishu attachment delivery
+openclaw:
+  enabled: true
+  channel: "feishu"
+  account: "sohu"
+  target: "user:ou_3e6c1be3a3b866454c3d79694956613d"
+  title: "GitHub AI 趋势日报（自动推送）"
+  timeout: 60
+  helper_script: "/Users/NikoBelic/app/git/stock-daily-report/scripts/openclaw_feishu_skill.sh"
+
+# Task Scheduling Configuration
+tasks:
+  daily_limit: 5          # Maximum repos to analyze per day
+  weekly_limit: 25        # Maximum repos to analyze per week
+  daily_hour: 10          # Hour to run daily task (0-23)
+  weekly_day: 5           # Day of week for weekly task (0=Monday, 6=Sunday)
+  weekly_hour: 16         # Hour to run weekly task (0-23)
+
+# Logging Configuration
+logging:
+  level: "INFO"           # DEBUG, INFO, WARNING, ERROR, CRITICAL
+  file: "logs/app.log"
+  max_bytes: 10485760     # 10MB
+  backup_count: 5

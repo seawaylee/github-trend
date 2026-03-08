@@ -275,3 +275,38 @@ def test_split_messages_respect_wecom_markdown_byte_limit_with_chinese():
 
     assert len(trend_message.encode("utf-8")) <= notifier.PUSH_MARKDOWN_LIMIT
     assert len(summary_message.encode("utf-8")) <= notifier.PUSH_MARKDOWN_LIMIT
+
+
+def test_format_daily_report_keeps_full_local_content_without_truncation():
+    """Local history report should keep full content; truncation is push-only."""
+    notifier = WeComNotifier("https://test.webhook.url")
+
+    long_desc = "DESC-" + ("A" * 260)
+    long_reason = "REASON-" + ("B" * 1500)
+    long_summary = "SUMMARY-" + ("C" * 3200)
+
+    projects_with_reasons = [
+        (
+            TrendingProject(
+                repo_name="test/full-local",
+                description=long_desc,
+                language="Python",
+                url="https://github.com/test/full-local",
+                stars=4321,
+                stars_growth=321,
+                ranking=1
+            ),
+            FilterResult(is_ai_related=True, reason=long_reason)
+        )
+    ]
+
+    report = notifier.format_daily_report(
+        projects_with_reasons,
+        date(2026, 3, 6),
+        long_summary
+    )
+
+    assert long_desc in report
+    assert long_reason in report
+    assert long_summary in report
+    assert "（总结较长，已自动精简）" not in report

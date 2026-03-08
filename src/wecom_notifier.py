@@ -193,11 +193,13 @@ class WeComNotifier:
 
             stars_str = f"{project.stars:,}"
             growth_str = f"+{project.stars_growth}" if project.stars_growth > 0 else ""
-            max_desc_length = 80 if for_push else 100
-            max_reason_length = 120 if for_push else 1200
-            short_desc = self._truncate_text(project.description, max_desc_length)
             normalized_reason = self._normalize_ai_highlight(result.reason, project.description)
-            short_reason = self._truncate_text(normalized_reason, max_reason_length)
+            if for_push:
+                short_desc = self._truncate_text(project.description, 80)
+                short_reason = self._truncate_text(normalized_reason, 120)
+            else:
+                short_desc = project.description
+                short_reason = normalized_reason
 
             lines.extend([
                 f"\n{emoji} **{project.repo_name}** ⭐ {stars_str} ({growth_str})",
@@ -213,7 +215,7 @@ class WeComNotifier:
 
     def _format_daily_summary_message(self, report_date: date, summary: str, for_push: bool = True) -> str:
         """Format summary/business analysis message in markdown."""
-        summary_content = self._prepare_summary_content(summary)
+        summary_content = self._prepare_summary_content(summary, for_push=for_push)
 
         lines = [
             "📝 **AI智能总结 & 业务价值分析**",
@@ -233,7 +235,7 @@ class WeComNotifier:
         for_push: bool = True
     ) -> str:
         """Format weekly summary/business analysis message in markdown."""
-        summary_content = self._prepare_summary_content(summary)
+        summary_content = self._prepare_summary_content(summary, for_push=for_push)
 
         lines = [
             "📝 **AI智能总结 & 业务价值分析**",
@@ -245,9 +247,12 @@ class WeComNotifier:
         message = "\n".join(lines)
         return self._fit_markdown_limit(message) if for_push else message
 
-    def _prepare_summary_content(self, summary: str) -> str:
-        """Normalize summary and keep it within a stable size budget."""
+    def _prepare_summary_content(self, summary: str, for_push: bool = True) -> str:
+        """Normalize summary and keep truncation for push-only output."""
         content = summary.strip() if summary and summary.strip() else "（生成总结失败）"
+        if not for_push:
+            return content
+
         if len(content.encode("utf-8")) <= self.SUMMARY_CONTENT_LIMIT:
             return content
 
