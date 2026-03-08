@@ -10,6 +10,7 @@ from src.config_loader import load_config, ConfigError
 from src.database import Database
 from src.github_scraper import GitHubScraper
 from src.ai_filter import AIFilter
+from src.openclaw_notifier import OpenClawNotifier
 from src.wecom_notifier import WeComNotifier
 
 DAILY_PUSH_LIMIT = 5
@@ -87,14 +88,20 @@ def run_daily_task(config: dict, dry_run: bool = False):
 
     # safe get github token
     github_config = config.get('github', {})
-    scraper = GitHubScraper(github_config.get('token'))
+    scraper = GitHubScraper(
+        github_token=github_config.get('token'),
+        request_timeout=github_config.get('request_timeout', 60),
+    )
 
     ai_filter = AIFilter(
         base_url=config['ai']['base_url'],
         api_key=config['ai']['api_key'],
-        model=config['ai']['model']
+        model=config['ai']['model'],
+        timeout=config['ai'].get('timeout', 30),
+        max_retries=config['ai'].get('max_retries', 1),
     )
     notifier = WeComNotifier(config['wecom']['webhook_url'])
+    openclaw_notifier = OpenClawNotifier.from_config(config.get('openclaw'))
     today = date.today()
 
     try:
@@ -114,8 +121,7 @@ def run_daily_task(config: dict, dry_run: bool = False):
         logger.info(f"Found {len(ai_projects)} AI-related projects")
 
         if ai_filter.last_filter_had_llm_failure:
-            logger.warning("LLM filter failed in this run, skip push")
-            return
+            logger.warning("LLM filter partially failed in this run, continue with fallback results")
 
         if not ai_projects:
             logger.warning("No AI projects found today, skip push")
@@ -162,9 +168,11 @@ def run_daily_task(config: dict, dry_run: bool = False):
         # Generate summary
         logger.info("Generating daily summary and business analysis...")
         summary = ai_filter.generate_daily_summary(top_projects)
-        if ai_filter.last_summary_had_llm_failure:
-            logger.warning("LLM summary failed in this run, skip push")
+        if not summary or not summary.strip():
+            logger.warning("Daily summary is empty, skip push")
             return
+        if ai_filter.last_summary_had_llm_failure:
+            logger.warning("LLM summary failed, using fallback summary for push")
 
         # Generate report content
         report_content = notifier.format_daily_report(top_projects, today, summary)
@@ -186,14 +194,26 @@ def run_daily_task(config: dict, dry_run: bool = False):
         if dry_run:
             print("\n🔍 DRY RUN - Would send the following message:\n")
             print(report_content)
+            if openclaw_notifier.is_enabled:
+                print(f"\n📎 DRY RUN - Would send markdown attachment via OpenClaw: {history_file}")
         else:
-            success = notifier.send_daily_report_split(top_projects, today, summary)
-            if success:
+            wecom_success = notifier.send_daily_report_split(top_projects, today, summary)
+            if wecom_success:
                 pushed_repo_names = [project.repo_name for project, _ in top_projects]
                 db.save_daily_push_records(pushed_repo_names, today)
                 logger.info("✓ Daily report split sent successfully")
             else:
                 logger.error("✗ Failed to send split daily report")
+
+            if openclaw_notifier.is_enabled:
+                openclaw_success = openclaw_notifier.send_markdown_file(
+                    history_file,
+                    title=f"GitHub AI 趋势日报 {today.isoformat()}（自动推送）",
+                )
+                if openclaw_success:
+                    logger.info("✓ Daily markdown attachment sent via OpenClaw")
+                else:
+                    logger.error("✗ Failed to send daily markdown attachment via OpenClaw")
 
     except Exception as e:
         logger.error(f"Daily task failed: {e}", exc_info=True)

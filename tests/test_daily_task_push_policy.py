@@ -73,7 +73,7 @@ def test_run_daily_task_no_ai_projects_does_not_push(
 @patch("main.AIFilter")
 @patch("main.OpenClawNotifier")
 @patch("main.WeComNotifier")
-def test_run_daily_task_filter_llm_failure_does_not_push(
+def test_run_daily_task_filter_llm_fallback_still_pushes(
     mock_notifier_cls,
     mock_openclaw_cls,
     mock_filter_cls,
@@ -83,6 +83,9 @@ def test_run_daily_task_filter_llm_failure_does_not_push(
     mock_db = mock_db_cls.return_value
     mock_db.init_db.return_value = None
     mock_db.close.return_value = None
+    mock_db.get_recently_pushed_repo_names.return_value = set()
+    mock_db.save_project.return_value = 1
+    mock_db.save_trend_record.return_value = 1
 
     mock_scraper = mock_scraper_cls.return_value
     mock_scraper.fetch_trending.side_effect = [[], []]
@@ -91,14 +94,17 @@ def test_run_daily_task_filter_llm_failure_does_not_push(
     mock_filter.batch_filter.return_value = [_ai_project("org/repo-a")]
     mock_filter.last_filter_had_llm_failure = True
     mock_filter.last_summary_had_llm_failure = False
+    mock_filter.generate_daily_summary.return_value = "summary from fallback-filtered projects"
 
     notifier = mock_notifier_cls.return_value
+    notifier.send_daily_report_split.return_value = True
     mock_openclaw_cls.from_config.return_value.is_enabled = False
 
     run_daily_task(_config(), dry_run=False)
 
     notifier.send_markdown.assert_not_called()
-    notifier.send_daily_report_split.assert_not_called()
+    notifier.send_daily_report_split.assert_called_once()
+    mock_db.save_daily_push_records.assert_called_once()
 
 
 @patch("main.Database")

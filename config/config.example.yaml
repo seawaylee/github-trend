@@ -1,6 +1,11 @@
 # GitHub AI Trend Tracker Configuration
 # Copy this file to config.yaml and update with your actual values
 
+# GitHub source configuration
+github:
+  token: ""
+  request_timeout: 60
+
 # AI Service Configuration (OpenRouter-compatible endpoint)
 ai:
   base_url: "https://gmn.chuangzuoli.com"

@@ -27,14 +27,16 @@ class GitHubScraper:
 
     BASE_URL = "https://github.com/trending"
 
-    def __init__(self, github_token: Optional[str] = None):
+    def __init__(self, github_token: Optional[str] = None, request_timeout: int = 60):
         """
         Initialize scraper
 
         Args:
             github_token: Optional GitHub token for API calls
+            request_timeout: GitHub trending page request timeout in seconds
         """
         self.github_token = github_token
+        self.request_timeout = max(5, int(request_timeout or 60))
         self.session = requests.Session()
         self.session.headers.update({
             'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36'
@@ -53,7 +55,7 @@ class GitHubScraper:
         url = f"{self.BASE_URL}?since={since}"
 
         try:
-            response = self.session.get(url, timeout=30)
+            response = self.session.get(url, timeout=self.request_timeout)
             response.raise_for_status()
 
             soup = BeautifulSoup(response.text, 'lxml')
