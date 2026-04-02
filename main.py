@@ -188,6 +188,10 @@ def run_daily_task(config: dict, dry_run: bool = False):
             logger.warning("No new projects to push after 7-day de-duplication, skip push")
             return
 
+        # Generate per-project deep analysis
+        logger.info("Generating per-project deep analysis...")
+        analysis_map = ai_filter.analyze_projects(top_projects)
+
         # Save to database
         for project, filter_result in ai_projects:
             # Save project
@@ -254,6 +258,7 @@ def run_daily_task(config: dict, dry_run: bool = False):
             summary,
             weekly_references=weekly_ranked,
             monthly_references=monthly_ranked,
+            analysis_map=analysis_map,
         )
 
         # Save to history
@@ -276,7 +281,9 @@ def run_daily_task(config: dict, dry_run: bool = False):
             if openclaw_notifier.is_enabled:
                 print(f"\n📎 DRY RUN - Would send markdown attachment via OpenClaw: {history_file}")
         else:
-            wecom_success = notifier.send_daily_report_split(top_projects, today, summary)
+            wecom_success = notifier.send_daily_report_split(
+                top_projects, today, summary, analysis_map=analysis_map
+            )
             if wecom_success:
                 pushed_repo_names = [project.repo_name for project, _ in top_projects]
                 db.save_daily_push_records(pushed_repo_names, today)

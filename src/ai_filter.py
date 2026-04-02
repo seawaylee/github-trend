@@ -39,6 +39,15 @@ class HeuristicAssessment:
     score: int = 0
 
 
+@dataclass
+class ProjectAnalysis:
+    """LLM-generated deep analysis for a single project."""
+    features: str = ""
+    advantages: str = ""
+    disadvantages: str = ""
+    recommendation: str = ""
+
+
 class AIFilter:
     """Filter AI-related projects using LLM + heuristic guardrails."""
 
@@ -286,6 +295,83 @@ class AIFilter:
                 logger.debug(f"✗ Not AI: {project.repo_name}")
 
         return results
+
+    def analyze_projects(
+        self, projects: List[tuple[TrendingProject, FilterResult]]
+    ) -> dict[str, ProjectAnalysis]:
+        """
+        Generate deep analysis for each project using LLM.
+
+        Returns a dict mapping repo_name -> ProjectAnalysis.
+        Falls back to empty ProjectAnalysis on failure.
+        """
+        if not projects:
+            return {}
+
+        project_lines = ""
+        for i, (p, _r) in enumerate(projects, 1):
+            project_lines += f"{i}. {p.repo_name}: {p.description} (Language: {p.language})\n"
+
+        prompt = f"""分析以下 GitHub 热门 AI 项目，对每个项目给出深度分析。
+
+项目列表：
+{project_lines}
+对每个项目严格按如下 JSON 格式返回分析结果：
+{{
+  "owner/repo-name": {{
+    "features": "一句话准确描述项目是什么、核心功能是什么（30-80字）",
+    "advantages": "该项目或该类工具的核心优势（20-50字）",
+    "disadvantages": "该项目的局限或风险（20-50字）",
+    "recommendation": "推荐关注的理由（20-50字）"
+  }}
+}}
+
+硬性要求：
+- features 必须准确反映项目真实功能，不要套模板、不要泛泛而谈。
+- advantages/disadvantages 要具体到该项目的领域，不要写"提高效率"这种万能话术。
+- recommendation 要有针对性。
+- 只返回 JSON，不要有任何其他文字。"""
+
+        try:
+            content = call_shared_llm(
+                prompt,
+                system_prompt="你是一个资深开源项目分析师，擅长准确概括项目的核心价值和局限性。",
+                model=self.model,
+                temperature=0.4,
+                timeout=self.timeout,
+                base_url=self.base_url,
+                api_key=self.api_key,
+                reasoning_effort="xhigh",
+            )
+            # Clean up markdown code blocks if present
+            if content.startswith("```"):
+                content = content.strip().strip("`")
+                if content.startswith("json"):
+                    content = content[4:]
+                content = content.strip()
+
+            raw = json.loads(content)
+            result = {}
+            for p, _ in projects:
+                name = p.repo_name
+                entry = raw.get(name, {})
+                if not entry:
+                    # Try case-insensitive match
+                    for key in raw:
+                        if key.lower() == name.lower():
+                            entry = raw[key]
+                            break
+                result[name] = ProjectAnalysis(
+                    features=entry.get("features", ""),
+                    advantages=entry.get("advantages", ""),
+                    disadvantages=entry.get("disadvantages", ""),
+                    recommendation=entry.get("recommendation", ""),
+                )
+            logger.info("LLM project analysis generated for %d projects", len(result))
+            return result
+        except Exception as e:
+            logger.warning("LLM project analysis failed, using empty fallback: %s", e)
+            return {p.repo_name: ProjectAnalysis() for p, _ in projects}
 
     def generate_daily_summary(self, projects: List[tuple[TrendingProject, FilterResult]]) -> str:
         """

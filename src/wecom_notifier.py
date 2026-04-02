@@ -5,7 +5,7 @@ import time
 from typing import List
 from datetime import date
 from src.github_scraper import TrendingProject
-from src.ai_filter import FilterResult
+from src.ai_filter import FilterResult, ProjectAnalysis
 
 
 logger = logging.getLogger(__name__)
@@ -92,6 +92,7 @@ class WeComNotifier:
         summary: str = "",
         weekly_references: List[tuple[TrendingProject, FilterResult]] | None = None,
         monthly_references: List[tuple[TrendingProject, FilterResult]] | None = None,
+        analysis_map: dict[str, ProjectAnalysis] | None = None,
     ) -> str:
         """Format daily report without sending"""
         return self._format_daily_message(
@@ -100,16 +101,20 @@ class WeComNotifier:
             summary,
             weekly_references=weekly_references,
             monthly_references=monthly_references,
+            analysis_map=analysis_map,
         )
 
     def format_daily_push_messages(
         self,
         projects_with_reasons: List[tuple[TrendingProject, FilterResult]],
         report_date: date,
-        summary: str = ""
+        summary: str = "",
+        analysis_map: dict[str, ProjectAnalysis] | None = None,
     ) -> tuple[str, str]:
         """Format two WeCom messages: trend list + summary/business analysis."""
-        trend_message = self._format_daily_top_message(projects_with_reasons, report_date)
+        trend_message = self._format_daily_top_message(
+            projects_with_reasons, report_date, analysis_map=analysis_map
+        )
         summary_message = self._format_daily_summary_message(report_date, summary)
         return trend_message, summary_message
 
@@ -117,7 +122,8 @@ class WeComNotifier:
         self,
         projects_with_reasons: List[tuple[TrendingProject, FilterResult]],
         report_date: date,
-        summary: str = ""
+        summary: str = "",
+        analysis_map: dict[str, ProjectAnalysis] | None = None,
     ) -> bool:
         """
         Send daily AI trends report
@@ -126,24 +132,29 @@ class WeComNotifier:
             projects_with_reasons: List of (project, filter_result) tuples
             report_date: Date of the report
             summary: Optional LLM-generated summary
+            analysis_map: Optional LLM-generated project analysis
 
         Returns:
             True if successful
         """
-        message = self._format_daily_message(projects_with_reasons, report_date, summary)
+        message = self._format_daily_message(
+            projects_with_reasons, report_date, summary, analysis_map=analysis_map
+        )
         return self.send_markdown(message)
 
     def send_daily_report_split(
         self,
         projects_with_reasons: List[tuple[TrendingProject, FilterResult]],
         report_date: date,
-        summary: str = ""
+        summary: str = "",
+        analysis_map: dict[str, ProjectAnalysis] | None = None,
     ) -> bool:
         """Send daily report as two WeCom markdown messages."""
         trend_message, summary_message = self.format_daily_push_messages(
             projects_with_reasons,
             report_date,
-            summary
+            summary,
+            analysis_map=analysis_map,
         )
 
         if not self.send_markdown(trend_message):
@@ -191,18 +202,24 @@ class WeComNotifier:
         self,
         projects_with_reasons: List[tuple[TrendingProject, FilterResult]],
         report_date: date,
-        for_push: bool = True
+        for_push: bool = True,
+        analysis_map: dict[str, ProjectAnalysis] | None = None,
     ) -> str:
         """Format top projects message in markdown."""
         if for_push:
-            message = self._format_push_top_message(projects_with_reasons, report_date)
+            message = self._format_push_top_message(
+                projects_with_reasons, report_date, analysis_map=analysis_map
+            )
             return self._fit_markdown_limit(message)
-        return self._format_local_top_message(projects_with_reasons, report_date)
+        return self._format_local_top_message(
+            projects_with_reasons, report_date, analysis_map=analysis_map
+        )
 
     def _format_push_top_message(
         self,
         projects_with_reasons: List[tuple[TrendingProject, FilterResult]],
         report_date: date,
+        analysis_map: dict[str, ProjectAnalysis] | None = None,
     ) -> str:
         """Render richer push cards and only shorten when the whole message needs it."""
         last_message = ""
@@ -212,6 +229,7 @@ class WeComNotifier:
                 report_date,
                 description_max=description_max,
                 highlight_max=highlight_max,
+                analysis_map=analysis_map,
             )
             if len(message.encode("utf-8")) <= self.PUSH_MARKDOWN_LIMIT:
                 return message
@@ -224,6 +242,7 @@ class WeComNotifier:
         report_date: date,
         description_max: int | None = None,
         highlight_max: int | None = None,
+        analysis_map: dict[str, ProjectAnalysis] | None = None,
     ) -> str:
         """Build a WeCom-friendly project list with optional adaptive shortening."""
         limit = len(projects_with_reasons)
@@ -239,8 +258,18 @@ class WeComNotifier:
             emoji = emojis[idx] if idx < len(emojis) else f"{idx+1}."
             stars_str = f"{project.stars:,}"
             growth_str = f"{project.stars_growth:+,}"
-            description = self._build_project_description(project)
-            highlight = self._normalize_ai_highlight(result.reason, project.description)
+
+            # Use LLM-generated features if available, otherwise fall back
+            analysis = (analysis_map or {}).get(project.repo_name)
+            if analysis and analysis.features:
+                description = analysis.features
+            else:
+                description = self._build_project_description(project)
+
+            if analysis and analysis.advantages:
+                highlight = analysis.advantages
+            else:
+                highlight = self._normalize_ai_highlight(result.reason, project.description)
 
             if description_max is not None:
                 description = self._truncate_text(description, description_max)
@@ -249,8 +278,8 @@ class WeComNotifier:
 
             lines.extend([
                 f"{emoji} **{project.repo_name}**｜{project.language or 'Unknown'}｜⭐ {stars_str}｜{growth_str}",
-                f"- 📝 项目描述：{description}",
-                f"- 💡 AI亮点：{highlight}",
+                f"- 📝 {description}",
+                f"- 💡 {highlight}",
                 f"- 🔗 {project.url}",
                 ""
             ])
@@ -265,6 +294,7 @@ class WeComNotifier:
         self,
         projects_with_reasons: List[tuple[TrendingProject, FilterResult]],
         report_date: date,
+        analysis_map: dict[str, ProjectAnalysis] | None = None,
     ) -> str:
         """Readable local markdown report for Feishu file delivery."""
         limit = len(projects_with_reasons)
@@ -281,18 +311,37 @@ class WeComNotifier:
         for idx, (project, result) in enumerate(projects_with_reasons, start=1):
             language = project.language or "Unknown"
             description = self._build_project_description(project)
-            normalized_reason = self._normalize_ai_highlight(result.reason, project.description)
-            project_detail = self._build_local_project_detail(
-                project,
-                normalized_reason
-            )
+            analysis = (analysis_map or {}).get(project.repo_name)
+
+            if analysis and (analysis.features or analysis.advantages):
+                features = analysis.features or self._build_project_description(project)
+                advantages = analysis.advantages or ""
+                disadvantages = analysis.disadvantages or ""
+                recommendation = analysis.recommendation or ""
+            else:
+                normalized_reason = self._normalize_ai_highlight(
+                    result.reason, project.description
+                )
+                project_detail = self._build_local_project_detail(project, normalized_reason)
+                features = project_detail['what_it_does']
+                advantages = ""
+                disadvantages = ""
+                recommendation = project_detail['problem_it_solves']
+
             lines.extend([
                 f"### {idx}. {project.repo_name}",
                 f"- 语言：{language}",
                 f"- 热度：⭐ {project.stars:,} ｜ 今日 {project.stars_growth:+,}",
                 f"- 项目描述：{description}",
-                f"- 它是干什么的：{project_detail['what_it_does']}",
-                f"- 能解决什么问题：{project_detail['problem_it_solves']}",
+                f"- 项目特点：{features}",
+            ])
+            if advantages:
+                lines.append(f"- 优势：{advantages}")
+            if disadvantages:
+                lines.append(f"- 劣势：{disadvantages}")
+            if recommendation:
+                lines.append(f"- 推荐理由：{recommendation}")
+            lines.extend([
                 f"- 链接：{project.url}",
                 ""
             ])
@@ -597,12 +646,14 @@ class WeComNotifier:
         summary: str = "",
         weekly_references: List[tuple[TrendingProject, FilterResult]] | None = None,
         monthly_references: List[tuple[TrendingProject, FilterResult]] | None = None,
+        analysis_map: dict[str, ProjectAnalysis] | None = None,
     ) -> str:
         """Format daily message in markdown"""
         top_message = self._format_daily_top_message(
             projects_with_reasons,
             report_date,
-            for_push=False
+            for_push=False,
+            analysis_map=analysis_map,
         )
         summary_message = self._format_daily_summary_message(
             report_date,
