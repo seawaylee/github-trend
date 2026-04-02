@@ -47,7 +47,7 @@ class GitHubScraper:
         Fetch trending repositories
 
         Args:
-            since: Time range - 'daily' or 'weekly'
+            since: Time range - 'daily', 'weekly', or 'monthly'
 
         Returns:
             List of trending projects

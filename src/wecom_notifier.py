@@ -16,6 +16,13 @@ class WeComNotifier:
     PUSH_MARKDOWN_LIMIT = 3800
     RETRY_SHRINK_LIMIT = 2500
     SUMMARY_CONTENT_LIMIT = 2600
+    PUSH_TEXT_TRUNCATION_PROFILES = (
+        (None, None),
+        (240, 260),
+        (180, 200),
+        (140, 160),
+        (100, 120),
+    )
 
     def __init__(self, webhook_url: str):
         """
@@ -82,10 +89,18 @@ class WeComNotifier:
         self,
         projects_with_reasons: List[tuple[TrendingProject, FilterResult]],
         report_date: date,
-        summary: str = ""
+        summary: str = "",
+        weekly_references: List[tuple[TrendingProject, FilterResult]] | None = None,
+        monthly_references: List[tuple[TrendingProject, FilterResult]] | None = None,
     ) -> str:
         """Format daily report without sending"""
-        return self._format_daily_message(projects_with_reasons, report_date, summary)
+        return self._format_daily_message(
+            projects_with_reasons,
+            report_date,
+            summary,
+            weekly_references=weekly_references,
+            monthly_references=monthly_references,
+        )
 
     def format_daily_push_messages(
         self,
@@ -179,39 +194,114 @@ class WeComNotifier:
         for_push: bool = True
     ) -> str:
         """Format top projects message in markdown."""
+        if for_push:
+            message = self._format_push_top_message(projects_with_reasons, report_date)
+            return self._fit_markdown_limit(message)
+        return self._format_local_top_message(projects_with_reasons, report_date)
+
+    def _format_push_top_message(
+        self,
+        projects_with_reasons: List[tuple[TrendingProject, FilterResult]],
+        report_date: date,
+    ) -> str:
+        """Render richer push cards and only shorten when the whole message needs it."""
+        last_message = ""
+        for description_max, highlight_max in self.PUSH_TEXT_TRUNCATION_PROFILES:
+            message = self._render_push_top_message(
+                projects_with_reasons,
+                report_date,
+                description_max=description_max,
+                highlight_max=highlight_max,
+            )
+            if len(message.encode("utf-8")) <= self.PUSH_MARKDOWN_LIMIT:
+                return message
+            last_message = message
+        return self._fit_markdown_limit(last_message)
+
+    def _render_push_top_message(
+        self,
+        projects_with_reasons: List[tuple[TrendingProject, FilterResult]],
+        report_date: date,
+        description_max: int | None = None,
+        highlight_max: int | None = None,
+    ) -> str:
+        """Build a WeCom-friendly project list with optional adaptive shortening."""
         limit = len(projects_with_reasons)
         lines = [
             f"🔥 **今日GitHub AI趋势 Top {limit}**",
-            f"\n📅 {report_date.strftime('%Y-%m-%d')}",
-            "\n---\n"
+            f"📅 {report_date.strftime('%Y-%m-%d')}",
+            ""
         ]
 
         emojis = ["1️⃣", "2️⃣", "3️⃣", "4️⃣", "5️⃣", "6️⃣", "7️⃣", "8️⃣", "9️⃣", "🔟"]
 
         for idx, (project, result) in enumerate(projects_with_reasons):
             emoji = emojis[idx] if idx < len(emojis) else f"{idx+1}."
-
             stars_str = f"{project.stars:,}"
-            growth_str = f"+{project.stars_growth}" if project.stars_growth > 0 else ""
-            normalized_reason = self._normalize_ai_highlight(result.reason, project.description)
-            if for_push:
-                short_desc = self._truncate_text(project.description, 80)
-                short_reason = self._truncate_text(normalized_reason, 120)
-            else:
-                short_desc = project.description
-                short_reason = normalized_reason
+            growth_str = f"{project.stars_growth:+,}"
+            description = self._build_project_description(project)
+            highlight = self._normalize_ai_highlight(result.reason, project.description)
+
+            if description_max is not None:
+                description = self._truncate_text(description, description_max)
+            if highlight_max is not None:
+                highlight = self._truncate_text(highlight, highlight_max)
 
             lines.extend([
-                f"\n{emoji} **{project.repo_name}** ⭐ {stars_str} ({growth_str})",
-                f"🏷 {project.language}",
-                f"📝 {short_desc}",
-                f"💡 AI亮点：{short_reason}",
-                f"🔗 [查看项目]({project.url})\n"
+                f"{emoji} **{project.repo_name}**｜{project.language or 'Unknown'}｜⭐ {stars_str}｜{growth_str}",
+                f"- 📝 项目描述：{description}",
+                f"- 💡 AI亮点：{highlight}",
+                f"- 🔗 {project.url}",
+                ""
             ])
 
-        lines.append("\n---\n⏰ 由GitHub-Trend-Bot自动推送")
-        message = "\n".join(lines)
-        return self._fit_markdown_limit(message) if for_push else message
+        lines.extend([
+            "---",
+            "⏰ 由GitHub-Trend-Bot自动推送"
+        ])
+        return "\n".join(lines)
+
+    def _format_local_top_message(
+        self,
+        projects_with_reasons: List[tuple[TrendingProject, FilterResult]],
+        report_date: date,
+    ) -> str:
+        """Readable local markdown report for Feishu file delivery."""
+        limit = len(projects_with_reasons)
+        lines = [
+            f"# GitHub AI 趋势 Top {limit}",
+            "",
+            f"- 日期：{report_date.strftime('%Y-%m-%d')}",
+            f"- 样本：当日筛选后的 Top {limit} AI 项目",
+            "",
+            "## 项目卡片",
+            "",
+        ]
+
+        for idx, (project, result) in enumerate(projects_with_reasons, start=1):
+            language = project.language or "Unknown"
+            description = self._build_project_description(project)
+            normalized_reason = self._normalize_ai_highlight(result.reason, project.description)
+            project_detail = self._build_local_project_detail(
+                project,
+                normalized_reason
+            )
+            lines.extend([
+                f"### {idx}. {project.repo_name}",
+                f"- 语言：{language}",
+                f"- 热度：⭐ {project.stars:,} ｜ 今日 {project.stars_growth:+,}",
+                f"- 项目描述：{description}",
+                f"- 它是干什么的：{project_detail['what_it_does']}",
+                f"- 能解决什么问题：{project_detail['problem_it_solves']}",
+                f"- 链接：{project.url}",
+                ""
+            ])
+
+        lines.extend([
+            "---",
+            "⏰ 由GitHub-Trend-Bot自动推送"
+        ])
+        return "\n".join(lines)
 
     def _format_daily_summary_message(self, report_date: date, summary: str, for_push: bool = True) -> str:
         """Format summary/business analysis message in markdown."""
@@ -302,11 +392,211 @@ class WeComNotifier:
 
         return normalized
 
+    @classmethod
+    def _build_project_brief(
+        cls,
+        project: TrendingProject,
+        reason: str
+    ) -> str:
+        """Build a short, user-facing one-liner for list views."""
+        normalized_reason = cls._normalize_ai_highlight(reason, project.description)
+        intro = cls._strip_ai_classification_tail(normalized_reason)
+        intro = cls._strip_ai_relevance_prefix(intro)
+        if intro:
+            return intro
+        return cls._build_project_description(project)
+
+    @staticmethod
+    def _build_project_description(project: TrendingProject) -> str:
+        """Return the raw project description or a readable fallback."""
+        return (project.description or "").strip() or "GitHub Trending 未提供项目描述。"
+
+    @staticmethod
+    def _escape_table_cell(text: str) -> str:
+        """Escape markdown table-breaking characters."""
+        return (text or "").replace("|", "／").replace("\n", " ").strip()
+
+    @staticmethod
+    def _strip_ai_relevance_prefix(text: str) -> str:
+        """Remove generic 'this is AI-related' openers for cleaner summaries."""
+        cleaned = (text or "").strip()
+        prefixes = (
+            "该项目与AI高度相关。",
+            "该项目与AI相关。",
+            "该项目明显与AI相关。",
+            "该项目大概率与AI相关。",
+            "该项目与AI高度相关",
+            "该项目与AI相关",
+        )
+        for prefix in prefixes:
+            if cleaned.startswith(prefix):
+                cleaned = cleaned[len(prefix):].strip()
+                break
+        return cleaned
+
+    @staticmethod
+    def _strip_reasoning_prefix(text: str) -> str:
+        """Remove reasoning-style openings so local docs read like introductions."""
+        cleaned = (text or "").strip()
+        prefixes = (
+            "项目描述中明确提到",
+            "项目描述明确提到",
+            "项目描述中写明",
+            "项目描述明确写明",
+            "项目描述中包含",
+            "项目描述包含",
+            "描述中明确提到",
+            "描述中提到",
+            "描述明确提到",
+            "描述明确写有",
+            "描述写明",
+            "该项目明确提到",
+            "该项目是",
+        )
+        for prefix in prefixes:
+            if cleaned.startswith(prefix):
+                cleaned = cleaned[len(prefix):].strip(" ：:，,。")
+                break
+        return cleaned
+
+    @classmethod
+    def _build_local_project_detail(
+        cls,
+        project: TrendingProject,
+        normalized_reason: str
+    ) -> dict[str, str]:
+        """Generate a fuller explanation for Feishu Markdown attachments."""
+        what_it_does = cls._infer_project_overview(project, normalized_reason)
+        problem_it_solves = cls._infer_problem_statement(project, what_it_does)
+        if not problem_it_solves:
+            problem_it_solves = "当前信息更偏项目定位说明，具体要解决的业务问题还需要结合 README 和示例进一步确认。"
+
+        return {
+            "what_it_does": what_it_does.strip(),
+            "problem_it_solves": problem_it_solves.strip(),
+        }
+
+    @staticmethod
+    def _strip_ai_classification_tail(reason: str) -> str:
+        """Remove generic 'therefore it is AI-related' tails and keep what the project does."""
+        text = (reason or "").strip()
+        if not text:
+            return ""
+
+        split_markers = ("因此", "所以", "由此可见", "因此可以判断", "因此可归类", "因此应归类")
+        classification_markers = (
+            "AI相关",
+            "AI 相关",
+            "AI工具",
+            "AI 工具",
+            "LLM",
+            "生态相关",
+            "归类",
+            "范畴",
+            "相关项目"
+        )
+
+        for marker in split_markers:
+            head, sep, tail = text.partition(marker)
+            if sep and any(keyword in tail for keyword in classification_markers):
+                text = head.strip("，。；; ")
+                break
+
+        if not text:
+            return ""
+        if text[-1] not in "。！？!?":
+            text += "。"
+        return text
+
+    @classmethod
+    def _infer_project_overview(cls, project: TrendingProject, normalized_reason: str) -> str:
+        """Rewrite repo info into a project intro instead of AI classification reasoning."""
+        description = cls._build_project_description(project)
+        combined = " ".join(
+            part for part in (
+                project.repo_name,
+                project.description,
+                normalized_reason,
+                project.language,
+            )
+            if part
+        ).lower()
+
+        if any(keyword in combined for keyword in ("pdf", "document", "doc", "parser", "knowledge", "笔记", "研究", "知识", "rag")):
+            return f"这是一个面向文档与知识处理的工具，核心是把像 PDF 这类非结构化内容整理成更适合系统、检索或模型继续使用的数据。当前项目描述是：{description}"
+
+        if any(keyword in combined for keyword in ("accounting", "invoice", "receipt", "finance", "trading", "财务", "发票", "收据", "交易")):
+            return f"这是一个面向财务或交易场景的智能分析工具/框架，重点是把票据、交易数据或决策流程自动化。当前项目描述是：{description}"
+
+        if any(keyword in combined for keyword in ("robot", "drone", "lidar", "camera", "无人机", "机器人", "激光雷达", "摄像头")):
+            return f"这是一个面向机器人或实体硬件平台的智能体控制框架，用来把感知、规划、执行和自然语言指令统一起来。当前项目描述是：{description}"
+
+        if any(keyword in combined for keyword in ("browser", "gui", "page", "web", "automation", "网页", "浏览器")):
+            return f"这是一个面向浏览器、网页界面或 GUI 自动化的基础设施项目，适合做自动操作、任务执行和代理控制。当前项目描述是：{description}"
+
+        if any(keyword in combined for keyword in (" api", "sdk", "wrapper", "封装", "接口")):
+            return f"这是一个把底层能力做成程序化接口的封装项目，方便开发者在脚本、服务或产品功能里直接接入。当前项目描述是：{description}"
+
+        if any(keyword in combined for keyword in ("design system", "design language", " ui ", " ux ", "设计")):
+            return f"这是一个偏设计语言或设计规范方向的项目，目的是让设计输出更稳定、更一致，也更容易被团队或系统复用。当前项目描述是：{description}"
+
+        if any(keyword in combined for keyword in ("assistant", "agent", "copilot", "workflow", "智能体", "工作流", "subagent")):
+            return f"这是一个面向 AI 助手、智能体或工作流编排的项目，重点在于把多步骤任务拆开、规划并交给不同角色或模块执行。当前项目描述是：{description}"
+
+        cleaned_reason = cls._strip_ai_classification_tail(normalized_reason)
+        cleaned_reason = cls._strip_ai_relevance_prefix(cleaned_reason)
+        cleaned_reason = cls._strip_reasoning_prefix(cleaned_reason)
+        if cleaned_reason:
+            return cleaned_reason
+
+        return f"这是一个当前在 GitHub Trending 上榜的项目。现有公开描述为：{description}"
+
+    @staticmethod
+    def _infer_problem_statement(project: TrendingProject, intro: str) -> str:
+        """Explain what pain point the project likely addresses."""
+        combined = " ".join(
+            part for part in (
+                project.repo_name,
+                project.description,
+                intro,
+                project.language,
+            )
+            if part
+        ).lower()
+
+        if any(keyword in combined for keyword in ("pdf", "document", "doc", "parser", "knowledge", "笔记", "研究", "知识", "rag")):
+            return "主要解决文档、PDF、知识资料难以直接进入 AI/LLM 工作流的问题，让内容更容易被解析、检索、理解和二次利用。"
+
+        if any(keyword in combined for keyword in ("accounting", "invoice", "receipt", "finance", "trading", "财务", "发票", "收据", "交易")):
+            return "主要解决财务票据处理、交易分析或金融决策中信息整理成本高、人工判断慢的问题。"
+
+        if any(keyword in combined for keyword in ("robot", "drone", "lidar", "camera", "无人机", "机器人", "激光雷达", "摄像头")):
+            return "主要解决机器人或实体设备缺少统一智能体控制层的问题，帮助把感知、规划、执行和自然语言指令串起来。"
+
+        if any(keyword in combined for keyword in ("browser", "gui", "page", "web", "automation", "网页", "浏览器")):
+            return "主要解决网页操作、界面控制和重复交互难以自动化的问题，适合浏览器自动化、GUI 操作代理和线上流程执行。"
+
+        if any(keyword in combined for keyword in (" api", "sdk", "wrapper", "封装", "接口")):
+            return "主要解决底层能力不好直接接入业务系统的问题，方便在脚本、自动化流程、后端服务或产品功能里快速调用。"
+
+        if any(keyword in combined for keyword in ("design system", "design language", " ui ", " ux ", "设计")):
+            return "主要解决 AI 生成结果在设计表达、界面一致性和交互规范上不稳定的问题。"
+
+        if any(keyword in combined for keyword in ("dashboard", "monitor", "news", "intelligence", "aggregation", "监控", "情报", "聚合")):
+            return "主要解决信息源分散、热点变化快、不容易持续跟踪的问题，适合做聚合、监控和分析。"
+
+        if any(keyword in combined for keyword in ("assistant", "agent", "copilot", "workflow", "智能体", "工作流", "subagent")):
+            return "主要解决多步骤任务需要人工串联、规划和执行的问题，适合复杂流程自动化、AI 助手编排和多人/多角色协作。"
+
+        return ""
+
     def _format_daily_message(
         self,
         projects_with_reasons: List[tuple[TrendingProject, FilterResult]],
         report_date: date,
-        summary: str = ""
+        summary: str = "",
+        weekly_references: List[tuple[TrendingProject, FilterResult]] | None = None,
+        monthly_references: List[tuple[TrendingProject, FilterResult]] | None = None,
     ) -> str:
         """Format daily message in markdown"""
         top_message = self._format_daily_top_message(
@@ -329,9 +619,47 @@ class WeComNotifier:
             top_without_footer,
             "\n---\n",
             summary_without_footer,
-            "\n---\n⏰ 由GitHub-Trend-Bot自动推送"
         ]
+
+        weekly_section = self._format_reference_section("周榜参考", weekly_references or [])
+        monthly_section = self._format_reference_section("月榜参考", monthly_references or [])
+        if weekly_section or monthly_section:
+            lines.append("\n---\n")
+            if weekly_section:
+                lines.append(weekly_section)
+            if monthly_section:
+                if weekly_section:
+                    lines.append("")
+                lines.append(monthly_section)
+
+        lines.append("\n---\n⏰ 由GitHub-Trend-Bot自动推送")
         return "\n".join(lines)
+
+    def _format_reference_section(
+        self,
+        title: str,
+        projects_with_reasons: List[tuple[TrendingProject, FilterResult]],
+        limit: int = 5,
+    ) -> str:
+        """Format bottom appendix sections for weekly/monthly references in local Markdown."""
+        if not projects_with_reasons:
+            return ""
+
+        lines = [f"## {title}", ""]
+        for idx, (project, result) in enumerate(projects_with_reasons[:limit], start=1):
+            detail = self._build_local_project_detail(
+                project,
+                self._normalize_ai_highlight(result.reason, project.description)
+            )
+            lines.extend([
+                f"{idx}. `{project.repo_name}`",
+                f"   - 语言：{project.language or 'Unknown'}",
+                f"   - Stars：{project.stars:,}",
+                f"   - 增长：{project.stars_growth:+,}",
+                f"   - 项目介绍：{detail['what_it_does']}",
+                "",
+            ])
+        return "\n".join(lines).rstrip()
 
     def _fit_markdown_limit(self, content: str) -> str:
         """Ensure markdown content stays within WeCom message UTF-8 byte limit."""

@@ -10,13 +10,10 @@ ENV/
 
 # 配置文件（包含敏感信息）
 config/config.yaml
-config/skill_watch.yaml
 
 # 数据库 / 运行态数据
 data/*.db
 data/*.db-journal
-data/skill_watch/
-history/skill_watch/
 
 # 日志
 logs/

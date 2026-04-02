@@ -18,11 +18,13 @@ DEFAULT_CHANNEL = "feishu"
 DEFAULT_ACCOUNT = "sohu"
 DEFAULT_TITLE = "GitHub AI 趋势日报（自动推送）"
 DEFAULT_TIMEOUT = 60
+DEFAULT_AGENT = "sohu"
+DEFAULT_AGENT_TIMEOUT = 240
 DEFAULT_HELPER_SCRIPT = (
     Path.home()
     / "app"
     / "git"
-    / "stock-daily-report"
+    / "core-common-tools"
     / "scripts"
     / "openclaw_feishu_skill.sh"
 )
@@ -37,6 +39,8 @@ class OpenClawNotifier:
     target: str = ""
     title: str = DEFAULT_TITLE
     timeout: int = DEFAULT_TIMEOUT
+    agent: str = DEFAULT_AGENT
+    agent_timeout: int = DEFAULT_AGENT_TIMEOUT
     helper_script: str = str(DEFAULT_HELPER_SCRIPT)
     openclaw_bin: str = ""
     media_dir: str = str(DEFAULT_MEDIA_DIR)
@@ -51,6 +55,8 @@ class OpenClawNotifier:
             target=str(config.get("target") or "").strip(),
             title=str(config.get("title") or DEFAULT_TITLE).strip() or DEFAULT_TITLE,
             timeout=max(10, int(config.get("timeout") or DEFAULT_TIMEOUT)),
+            agent=str(config.get("agent") or DEFAULT_AGENT).strip() or DEFAULT_AGENT,
+            agent_timeout=max(30, int(config.get("agent_timeout") or DEFAULT_AGENT_TIMEOUT)),
             helper_script=str(config.get("helper_script") or DEFAULT_HELPER_SCRIPT).strip(),
             openclaw_bin=str(config.get("openclaw_bin") or "").strip(),
             media_dir=str(config.get("media_dir") or DEFAULT_MEDIA_DIR).strip(),
@@ -65,39 +71,22 @@ class OpenClawNotifier:
             logger.info("OpenClaw notifier disabled or target missing, skip send")
             return True
 
-        helper_script = Path(self.helper_script)
-        if not helper_script.exists() or not helper_script.is_file():
-            logger.error("OpenClaw helper script not found: %s", helper_script)
+        helper_script = self._resolve_helper_script()
+        if helper_script is None:
             return False
 
-        command = [
-            "bash",
-            str(helper_script),
-            "send",
-            "--message",
-            str(message or "").strip(),
-            "--channel",
-            self.channel,
-            "--account",
-            self.account,
-            "--target",
-            self.target,
-            "--timeout",
-            str(self.timeout),
-        ]
-        if self.openclaw_bin:
-            command.extend(["--openclaw-bin", self.openclaw_bin])
-
-        try:
-            proc = subprocess.run(
-                command,
-                check=False,
-                capture_output=True,
-                text=True,
-                timeout=self.timeout + 20,
-            )
-        except Exception as exc:
-            logger.error("OpenClaw text send failed to execute: %s", exc)
+        command = self._build_helper_command(
+            helper_script=helper_script,
+            subcommand="send",
+            message=str(message or "").strip(),
+            timeout_seconds=self.timeout,
+        )
+        proc = self._run_helper_command(
+            command,
+            timeout_seconds=self.timeout,
+            execute_error_label="OpenClaw text send",
+        )
+        if proc is None:
             return False
 
         if proc.returncode == 0:
@@ -121,9 +110,8 @@ class OpenClawNotifier:
             logger.error("OpenClaw report file not found: %s", source)
             return False
 
-        helper_script = Path(self.helper_script)
-        if not helper_script.exists() or not helper_script.is_file():
-            logger.error("OpenClaw helper script not found: %s", helper_script)
+        helper_script = self._resolve_helper_script()
+        if helper_script is None:
             return False
 
         try:
@@ -132,48 +120,121 @@ class OpenClawNotifier:
             logger.error("Failed to prepare OpenClaw media file: %s", exc)
             return False
 
+        message = str(title or self.title)
+        command = self._build_helper_command(
+            helper_script=helper_script,
+            subcommand="send",
+            message=message,
+            media_path=media_path,
+            timeout_seconds=self.timeout,
+        )
+        proc = self._run_helper_command(
+            command,
+            timeout_seconds=self.timeout,
+            execute_error_label="OpenClaw attachment send",
+        )
+        if proc is not None and proc.returncode == 0:
+            logger.info("OpenClaw markdown attachment sent successfully")
+            return True
+
+        if proc is not None:
+            logger.error(
+                "OpenClaw attachment send failed (code=%s): %s",
+                proc.returncode,
+                self._summarize_failure(proc.stdout, proc.stderr),
+            )
+
+        logger.info(
+            "OpenClaw attachment direct send failed; falling back to send-via-agent "
+            "(agent=%s, timeout=%ss)",
+            self.agent,
+            self.agent_timeout,
+        )
+        fallback_command = self._build_helper_command(
+            helper_script=helper_script,
+            subcommand="send-via-agent",
+            message=message,
+            media_path=media_path,
+            timeout_seconds=self.agent_timeout,
+            agent=self.agent,
+        )
+        fallback_proc = self._run_helper_command(
+            fallback_command,
+            timeout_seconds=self.agent_timeout,
+            execute_error_label="OpenClaw attachment fallback send-via-agent",
+        )
+        if fallback_proc is None:
+            return False
+
+        if fallback_proc.returncode == 0:
+            logger.info("OpenClaw markdown attachment sent successfully via send-via-agent")
+            return True
+
+        logger.error(
+            "OpenClaw attachment fallback send-via-agent failed (code=%s): %s",
+            fallback_proc.returncode,
+            self._summarize_failure(fallback_proc.stdout, fallback_proc.stderr),
+        )
+        return False
+
+    def _resolve_helper_script(self) -> Path | None:
+        helper_script = Path(self.helper_script)
+        if helper_script.exists() and helper_script.is_file():
+            return helper_script
+        logger.error("OpenClaw helper script not found: %s", helper_script)
+        return None
+
+    def _build_helper_command(
+        self,
+        *,
+        helper_script: Path,
+        subcommand: str,
+        message: str,
+        timeout_seconds: int,
+        media_path: Path | None = None,
+        agent: str = "",
+    ) -> list[str]:
         command = [
             "bash",
             str(helper_script),
-            "send",
+            subcommand,
             "--message",
-            str(title or self.title),
+            message,
             "--channel",
             self.channel,
             "--account",
             self.account,
             "--target",
             self.target,
-            "--media",
-            str(media_path),
             "--timeout",
-            str(self.timeout),
+            str(timeout_seconds),
         ]
+        if media_path is not None:
+            command.extend(["--media", str(media_path)])
+        if agent:
+            command.extend(["--agent", agent])
         if self.openclaw_bin:
             command.extend(["--openclaw-bin", self.openclaw_bin])
+        return command
 
+    @staticmethod
+    def _run_helper_command(
+        command: list[str],
+        *,
+        timeout_seconds: int,
+        execute_error_label: str,
+    ) -> subprocess.CompletedProcess[str] | None:
         try:
-            proc = subprocess.run(
+            return subprocess.run(
                 command,
                 check=False,
                 capture_output=True,
                 text=True,
-                timeout=self.timeout + 20,
+                timeout=timeout_seconds + 20,
             )
         except Exception as exc:
-            logger.error("OpenClaw attachment send failed to execute: %s", exc)
-            return False
-
-        if proc.returncode == 0:
-            logger.info("OpenClaw markdown attachment sent successfully")
-            return True
-
-        logger.error(
-            "OpenClaw attachment send failed (code=%s): %s",
-            proc.returncode,
-            self._summarize_failure(proc.stdout, proc.stderr),
-        )
-        return False
+            logger.error("%s failed to execute: %s", execute_error_label, exc)
+            return None
 
     def _prepare_media_file(self, source: Path) -> Path:
         media_dir = Path(self.media_dir).expanduser()

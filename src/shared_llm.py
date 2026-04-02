@@ -52,7 +52,7 @@ def call_shared_llm(
     reasoning_effort: str | None = None,
 ) -> str:
     module = _load_shared_llm_module()
-    return module.chat_completion_or_raise(
+    result = module.chat_completion(
         prompt,
         system_prompt=system_prompt,
         model=(model or DEFAULT_MODEL),
@@ -62,3 +62,6 @@ def call_shared_llm(
         api_key=(str(api_key).strip() or None) if api_key is not None else None,
         reasoning_effort=(reasoning_effort or DEFAULT_REASONING_EFFORT),
     )
+    if result is None:
+        raise RuntimeError("All LLM fallbacks failed (GMN + OpenRouter #1 + OpenRouter #2)")
+    return result

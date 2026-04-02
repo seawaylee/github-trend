@@ -26,7 +26,9 @@ openclaw:
   target: "user:your_feishu_open_id"
   title: "GitHub AI 趋势日报（自动推送）"
   timeout: 60
-  helper_script: "/Users/you/app/git/stock-daily-report/scripts/openclaw_feishu_skill.sh"
+  agent: "sohu"
+  agent_timeout: 240
+  helper_script: "/Users/you/app/git/core-common-tools/scripts/openclaw_feishu_skill.sh"
 
 # Task Scheduling Configuration
 tasks:

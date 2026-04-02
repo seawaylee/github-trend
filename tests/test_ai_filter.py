@@ -49,15 +49,21 @@ def test_keyword_fallback():
         model="gpt-5.4"
     )
 
-    # Test AI-related keywords
+    # Test explicit AI-related keywords
     assert filter._keyword_fallback("machine learning framework") is True
     assert filter._keyword_fallback("LLM application") is True
     assert filter._keyword_fallback("GPT-based chatbot") is True
     assert filter._keyword_fallback("deep neural network") is True
 
+    # Test AI-native tooling / agent infrastructure
+    assert filter._keyword_fallback(
+        "Universal CLI hub and AI-native runtime built for AI agents to discover and execute tools"
+    ) is True
+
     # Test non-AI projects
     assert filter._keyword_fallback("web development framework") is False
     assert filter._keyword_fallback("database management") is False
+    assert filter._keyword_fallback("terminal productivity cli for local files") is False
 
 
 def test_generate_daily_summary_filters_meta_leakage():
@@ -165,5 +171,39 @@ def test_is_ai_related_marks_llm_failure_when_fallback_used():
         result = filter.is_ai_related(project)
 
         assert result.is_ai_related is True
-        assert "关键词" in result.reason
         assert filter.last_filter_had_llm_failure is True
+
+
+def test_is_ai_related_overrides_llm_false_negative_for_ai_native_tooling():
+    """AI-native tooling should not be dropped just because the LLM answers too narrowly."""
+    with patch(
+        "src.ai_filter.call_shared_llm",
+        return_value='{"is_ai_related": false, "reason": "Looks like a generic CLI tool"}'
+    ):
+        filter = AIFilter(
+            base_url="https://gmn.chuangzuoli.com",
+            api_key="sk-test",
+            model="gpt-5.4",
+            timeout=120,
+            max_retries=3,
+        )
+
+        project = TrendingProject(
+            repo_name="jackwener/opencli",
+            description=(
+                "A universal CLI Hub and AI-native runtime. "
+                "Transform websites and apps into commands. Built for AI Agents."
+            ),
+            language="TypeScript",
+            url="https://github.com/jackwener/opencli",
+            stars=1000,
+            stars_growth=100,
+            ranking=1
+        )
+
+        result = filter.is_ai_related(project)
+
+        assert result.is_ai_related is True
+        assert result.category == "ai_native_tooling"
+        assert "工具链" in result.reason or "运行时" in result.reason
+        assert filter.last_filter_had_llm_failure is False

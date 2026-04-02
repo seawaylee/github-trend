@@ -52,7 +52,7 @@ def test_run_daily_task_no_ai_projects_does_not_push(
     mock_db.close.return_value = None
 
     mock_scraper = mock_scraper_cls.return_value
-    mock_scraper.fetch_trending.side_effect = [[], []]
+    mock_scraper.fetch_trending.side_effect = [[], [], []]
 
     mock_filter = mock_filter_cls.return_value
     mock_filter.batch_filter.return_value = []
@@ -88,7 +88,7 @@ def test_run_daily_task_filter_llm_failure_notifies_agent_and_skips_push(
     mock_db.save_trend_record.return_value = 1
 
     mock_scraper = mock_scraper_cls.return_value
-    mock_scraper.fetch_trending.side_effect = [[], []]
+    mock_scraper.fetch_trending.side_effect = [[], [], []]
 
     mock_filter = mock_filter_cls.return_value
     mock_filter.batch_filter.return_value = [_ai_project("org/repo-a")]
@@ -129,7 +129,7 @@ def test_run_daily_task_summary_llm_failure_notifies_agent_and_skips_push(
     mock_db.save_trend_record.return_value = 1
 
     mock_scraper = mock_scraper_cls.return_value
-    mock_scraper.fetch_trending.side_effect = [[], []]
+    mock_scraper.fetch_trending.side_effect = [[], [], []]
 
     mock_filter = mock_filter_cls.return_value
     mock_filter.batch_filter.return_value = [_ai_project("org/repo-a")]
@@ -171,7 +171,7 @@ def test_run_daily_task_sends_markdown_attachment_via_openclaw_when_enabled(
     mock_db.save_trend_record.return_value = 1
 
     mock_scraper = mock_scraper_cls.return_value
-    mock_scraper.fetch_trending.side_effect = [[], []]
+    mock_scraper.fetch_trending.side_effect = [[], [], []]
 
     mock_filter = mock_filter_cls.return_value
     mock_filter.batch_filter.return_value = [_ai_project("org/repo-a")]

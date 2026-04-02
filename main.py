@@ -13,8 +13,10 @@ from src.ai_filter import AIFilter
 from src.openclaw_notifier import OpenClawNotifier
 from src.wecom_notifier import WeComNotifier
 
-DAILY_PUSH_LIMIT = 5
+DAILY_PUSH_LIMIT = 10
 RECENT_PUSH_LOOKBACK_DAYS = 7
+DAILY_TOOLING_FLOOR = 2
+TOOLING_PRIORITY_CATEGORIES = {"ai_native_tooling", "agent_workflow"}
 
 
 def _notify_agent_llm_failure(
@@ -100,6 +102,21 @@ def show_stats(db_path: str = "data/trends.db"):
     db.close()
 
 
+def merge_trending_projects(*project_lists):
+    """Merge multiple trending lists and keep the first occurrence of each repo."""
+    merged = []
+    seen_repo_names = set()
+
+    for projects in project_lists:
+        for project in projects:
+            if project.repo_name in seen_repo_names:
+                continue
+            seen_repo_names.add(project.repo_name)
+            merged.append(project)
+
+    return merged
+
+
 def run_daily_task(config: dict, dry_run: bool = False):
     """Run daily trending task"""
     logger = logging.getLogger(__name__)
@@ -135,8 +152,13 @@ def run_daily_task(config: dict, dry_run: bool = False):
         logger.info("Fetching weekly trending...")
         weekly_projects = scraper.fetch_trending('weekly')
 
-        all_projects = daily_projects + weekly_projects
-        logger.info(f"Total projects fetched: {len(all_projects)}")
+        all_projects = merge_trending_projects(daily_projects, weekly_projects)
+        logger.info(
+            "Total projects fetched: %s unique (%s daily + %s weekly)",
+            len(all_projects),
+            len(daily_projects),
+            len(weekly_projects)
+        )
 
         # Filter AI projects
         logger.info("Filtering AI-related projects...")
@@ -203,8 +225,36 @@ def run_daily_task(config: dict, dry_run: bool = False):
                 _notify_agent_llm_failure(openclaw_notifier, today, "总结生成")
             return
 
+        ai_result_by_repo = {project.repo_name: result for project, result in ai_projects}
+        weekly_ranked = [
+            (project, ai_result_by_repo[project.repo_name])
+            for project in weekly_projects
+            if project.repo_name in ai_result_by_repo
+        ]
+
+        logger.info("Fetching monthly trending for local markdown appendix...")
+        monthly_projects = scraper.fetch_trending('monthly')
+        monthly_ranked = []
+        if monthly_projects:
+            logger.info("Filtering monthly AI-related projects for local markdown appendix...")
+            monthly_filter = AIFilter(
+                base_url=config['ai']['base_url'],
+                api_key=config['ai']['api_key'],
+                model=config['ai']['model'],
+                timeout=config['ai'].get('timeout', 30),
+                max_retries=config['ai'].get('max_retries', 1),
+            )
+            monthly_ranked = monthly_filter.batch_filter(monthly_projects)
+            logger.info("Found %s AI-related monthly trending projects for appendix", len(monthly_ranked))
+
         # Generate report content
-        report_content = notifier.format_daily_report(top_projects, today, summary)
+        report_content = notifier.format_daily_report(
+            top_projects,
+            today,
+            summary,
+            weekly_references=weekly_ranked,
+            monthly_references=monthly_ranked,
+        )
 
         # Save to history
         history_dir = Path("history")
@@ -263,15 +313,50 @@ def select_daily_projects_for_push(
     db: Database,
     today: date
 ) -> list[tuple]:
-    """Select Top5 daily projects excluding repos pushed in last 7 days."""
+    """Select Top10 daily projects, while giving AI-native tooling enough exposure."""
     recent_pushed = db.get_recently_pushed_repo_names(
         lookback_days=RECENT_PUSH_LOOKBACK_DAYS,
         reference_date=today
     )
-    return [
+    candidates = [
         item for item in ai_projects
         if item[0].repo_name not in recent_pushed
-    ][:DAILY_PUSH_LIMIT]
+    ]
+    if len(candidates) <= DAILY_PUSH_LIMIT:
+        return candidates
+
+    selected = candidates[:DAILY_PUSH_LIMIT]
+
+    def is_tooling_item(item: tuple) -> bool:
+        _, result = item
+        return getattr(result, 'category', '') in TOOLING_PRIORITY_CATEGORIES
+
+    tooling_candidates = [item for item in candidates if is_tooling_item(item)]
+    target_tooling_count = min(DAILY_TOOLING_FLOOR, len(tooling_candidates), DAILY_PUSH_LIMIT)
+    current_tooling_count = sum(1 for item in selected if is_tooling_item(item))
+
+    if current_tooling_count >= target_tooling_count:
+        return selected
+
+    replacement_indexes = [
+        idx for idx in range(len(selected) - 1, -1, -1)
+        if not is_tooling_item(selected[idx])
+    ]
+    selected_repo_names = {project.repo_name for project, _ in selected}
+    extra_tooling = [
+        item for item in candidates[DAILY_PUSH_LIMIT:]
+        if is_tooling_item(item) and item[0].repo_name not in selected_repo_names
+    ]
+
+    missing = min(
+        target_tooling_count - current_tooling_count,
+        len(replacement_indexes),
+        len(extra_tooling),
+    )
+    for offset in range(missing):
+        selected[replacement_indexes[offset]] = extra_tooling[offset]
+
+    return selected
 
 
 def main():

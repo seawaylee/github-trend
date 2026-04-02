@@ -21,7 +21,7 @@ openclaw:
   target: "user:ou_3e6c1be3a3b866454c3d79694956613d"
   title: "GitHub AI 趋势日报（自动推送）"
   timeout: 60
-  helper_script: "/Users/NikoBelic/app/git/stock-daily-report/scripts/openclaw_feishu_skill.sh"
+  helper_script: "/Users/NikoBelic/app/git/core-common-tools/scripts/openclaw_feishu_skill.sh"
 
 # Task Scheduling Configuration
 tasks:

@@ -38,7 +38,7 @@ def test_format_daily_message():
 
     message = notifier._format_daily_message(projects_with_reasons, date(2026, 2, 9))
 
-    assert "GitHub AI趋势" in message
+    assert "GitHub AI 趋势" in message
     assert "2026-02-09" in message
     assert "test/ml-lib" in message
     assert "⭐ 1,000" in message
@@ -86,6 +86,9 @@ def test_format_daily_push_messages_split():
     )
 
     assert "🔥 **今日GitHub AI趋势 Top 1**" in trend_message
+    assert "📝 项目描述：Machine learning library" in trend_message
+    assert "💡 AI亮点：Uses ML algorithms" in trend_message
+    assert "..." not in trend_message
     assert "📝 **AI智能总结 & 业务价值分析**" not in trend_message
     assert "📝 **AI智能总结 & 业务价值分析**" in summary_message
     assert "🚀 **搜狐业务价值分析**" in summary_message
@@ -210,7 +213,8 @@ def test_format_daily_top_message_rewrites_unavailable_reason():
     )
 
     assert "LLM unavailable" not in message
-    assert "基于项目描述中的关键词判定" in message
+    assert "这是一个面向 AI 助手、智能体或工作流编排的项目" in message
+    assert "能解决什么问题：主要解决多步骤任务需要人工串联、规划和执行的问题" in message
 
 
 def test_split_messages_respect_wecom_markdown_limit():
@@ -275,6 +279,9 @@ def test_split_messages_respect_wecom_markdown_byte_limit_with_chinese():
 
     assert len(trend_message.encode("utf-8")) <= notifier.PUSH_MARKDOWN_LIMIT
     assert len(summary_message.encode("utf-8")) <= notifier.PUSH_MARKDOWN_LIMIT
+    assert "📝 项目描述：" in trend_message
+    assert "💡 AI亮点：" in trend_message
+    assert "（内容过长，已截断）" not in trend_message
 
 
 def test_format_daily_report_keeps_full_local_content_without_truncation():
@@ -310,3 +317,90 @@ def test_format_daily_report_keeps_full_local_content_without_truncation():
     assert long_reason in report
     assert long_summary in report
     assert "（总结较长，已自动精简）" not in report
+
+
+def test_format_daily_report_uses_detailed_local_intro_and_appends_weekly_monthly_refs():
+    """Local Markdown should focus on project intro/problem and append weekly/monthly refs."""
+    notifier = WeComNotifier("https://test.webhook.url")
+
+    projects_with_reasons = [
+        (
+            TrendingProject(
+                repo_name="test/notebooklm-py",
+                description="Unofficial Python API for Google NotebookLM",
+                language="Python",
+                url="https://github.com/test/notebooklm-py",
+                stars=3763,
+                stars_growth=196,
+                ranking=1
+            ),
+            FilterResult(
+                is_ai_related=True,
+                reason=(
+                    "该项目是 Google NotebookLM 的非官方 Python API。"
+                    "NotebookLM 是基于大语言模型的 AI 笔记与研究助手，"
+                    "因此为其提供 API 封装属于 AI 工具/LLM 生态相关项目。"
+                )
+            )
+        )
+    ]
+
+    weekly_references = [
+        (
+            TrendingProject(
+                repo_name="test/weekly-agent",
+                description="An agent workflow framework for multi-step tasks",
+                language="TypeScript",
+                url="https://github.com/test/weekly-agent",
+                stars=5200,
+                stars_growth=440,
+                ranking=1
+            ),
+            FilterResult(is_ai_related=True, reason="该项目面向 AI agent 工作流编排。")
+        )
+    ]
+
+    monthly_references = [
+        (
+            TrendingProject(
+                repo_name="test/monthly-browser",
+                description="Headless browser built for AI automation",
+                language="Rust",
+                url="https://github.com/test/monthly-browser",
+                stars=8800,
+                stars_growth=930,
+                ranking=1
+            ),
+            FilterResult(is_ai_related=True, reason="该项目用于 AI 场景下的浏览器自动化。")
+        )
+    ]
+
+    report = notifier.format_daily_report(
+        projects_with_reasons,
+        date(2026, 3, 9),
+        "",
+        weekly_references=weekly_references,
+        monthly_references=monthly_references,
+    )
+    trend_message, _ = notifier.format_daily_push_messages(
+        projects_with_reasons,
+        date(2026, 3, 9),
+        ""
+    )
+
+    assert "## 榜单速览" not in report
+    assert "## 项目卡片" in report
+    assert "- 项目描述：Unofficial Python API for Google NotebookLM" in report
+    assert "- 它是干什么的：这是一个面向文档与知识处理的工具" in report
+    assert "- 能解决什么问题：主要解决文档、PDF、知识资料难以直接进入 AI/LLM 工作流的问题" in report
+    assert "📝 原始描述：" not in report
+    assert "💡 AI亮点：" not in report
+    assert "📌 项目介绍：" not in report
+    assert "- 一句话：" not in report
+    assert "## 周榜参考" in report
+    assert "test/weekly-agent" in report
+    assert "## 月榜参考" in report
+    assert "test/monthly-browser" in report
+    assert "📝 项目描述：Unofficial Python API for Google NotebookLM" in trend_message
+    assert "💡 AI亮点：" in trend_message
+    assert "📌 项目介绍：" not in trend_message
