@@ -12,7 +12,6 @@ def test_from_config_defaults_to_disabled_without_target():
     assert notifier.enabled is False
     assert notifier.is_enabled is False
     assert notifier.account == "sohu"
-    assert notifier.agent == "sohu"
     assert notifier.timeout == 60
     assert notifier.agent_timeout == 240
 
@@ -88,10 +87,9 @@ def test_send_markdown_file_falls_back_to_agent_when_direct_send_fails(mock_run,
     direct_command = mock_run.call_args_list[0].args[0]
     fallback_command = mock_run.call_args_list[1].args[0]
     assert direct_command[:3] == ["bash", str(helper_script), "send"]
-    assert fallback_command[:3] == ["bash", str(helper_script), "send-via-agent"]
-    assert "--agent" in fallback_command and "sohu" in fallback_command
+    assert fallback_command[:3] == ["bash", str(helper_script), "send"]
     assert "--timeout" in fallback_command and "240" in fallback_command
-    assert "falling back to send-via-agent" in caplog.text
+    assert "retrying with longer timeout" in caplog.text
 
 
 @patch("src.openclaw_notifier.subprocess.run")
